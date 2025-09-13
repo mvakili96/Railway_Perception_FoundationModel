@@ -4,10 +4,19 @@ import shutil
 import sys
 import time
 from functools import partial
+import inspect
+import torch
+
+_sig = inspect.signature(torch.nn.Module.register_forward_pre_hook)
+if ('prepend' not in _sig.parameters) or ('with_kwargs' not in _sig.parameters):
+    _orig = torch.nn.Module.register_forward_pre_hook
+    def _compat(self, hook, *args, **kwargs):
+        # Older torch doesn't accept these kwargs; ignore them.
+        return _orig(self, hook)
+    torch.nn.Module.register_forward_pre_hook = _compat
 
 import deepspeed
 import numpy as np
-import torch
 import tqdm
 import transformers
 from peft import LoraConfig, get_peft_model
@@ -266,7 +275,7 @@ def main(args):
         print(f"Training with {len(train_dataset)} examples.")
 
     ds_config = {
-        "train_micro_batch_size_per_gpu": args.batch_size,
+        "train_micro_batch_size_per_gpu": 1,
         "gradient_accumulation_steps": args.grad_accumulation_steps,
         "optimizer": {
             "type": "AdamW",
@@ -274,6 +283,7 @@ def main(args):
                 "lr": args.lr,
                 "weight_decay": 0.0,
                 "betas": (args.beta1, args.beta2),
+                "torch_adam": True,
             },
         },
         "scheduler": {
@@ -298,8 +308,8 @@ def main(args):
             "contiguous_gradients": True,
             "overlap_comm": True,
             "reduce_scatter": True,
-            "reduce_bucket_size": 5e8,
-            "allgather_bucket_size": 5e8,
+            "reduce_bucket_size": 2e5,
+            "allgather_bucket_size": 2e5,
         },
     }
     model_engine, optimizer, train_loader, scheduler = deepspeed.initialize(
