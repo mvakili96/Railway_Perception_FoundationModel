@@ -36,6 +36,11 @@ def parse_args(args):
     parser.add_argument(
         "--version", default="liuhaotian/llava-llama-2-13b-chat-lightning-preview"
     )
+
+    parser.add_argument("--hf_merged_model", action="store_true", default=False,
+                    help="Model is already merged (HF release like xinlai/LISA-7B-v1); skip SAM/LLaVA init.")
+
+
     parser.add_argument("--vis_save_path", default="./vis_output", type=str)
     parser.add_argument(
         "--precision",
@@ -45,7 +50,7 @@ def parse_args(args):
         help="precision for inference",
     )
     parser.add_argument("--image_size", default=1024, type=int, help="image size")
-    parser.add_argument("--model_max_length", default=512, type=int)
+    parser.add_argument("--model_max_length", default=1024, type=int)
     parser.add_argument("--lora_r", default=8, type=int)
     parser.add_argument(
         "--vision-tower", default="openai/clip-vit-large-patch14", type=str
@@ -74,7 +79,7 @@ def parse_args(args):
     parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--steps_per_epoch", default=500, type=int)
     parser.add_argument(
-        "--batch_size", default=2, type=int, help="batch size per device per step"
+        "--batch_size", default=1, type=int, help="batch size per device per step"
     )
     parser.add_argument(
         "--grad_accumulation_steps",
@@ -141,6 +146,7 @@ def main(args):
             [DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True
         )
 
+    vision_pretrained = None if args.hf_merged_model else args.vision_pretrained
     model_args = {
         "train_mask_decoder": args.train_mask_decoder,
         "out_dim": args.out_dim,
@@ -148,7 +154,7 @@ def main(args):
         "dice_loss_weight": args.dice_loss_weight,
         "bce_loss_weight": args.bce_loss_weight,
         "seg_token_idx": args.seg_token_idx,
-        "vision_pretrained": args.vision_pretrained,
+        "vision_pretrained": vision_pretrained,
         "vision_tower": args.vision_tower,
         "use_mm_start_end": args.use_mm_start_end,
     }
@@ -160,6 +166,14 @@ def main(args):
     model = LISAForCausalLM.from_pretrained(
         args.version, torch_dtype=torch_dtype, low_cpu_mem_usage=True, **model_args
     )
+
+    if args.hf_merged_model:
+        model.ce_loss_weight   = args.ce_loss_weight
+        model.dice_loss_weight = args.dice_loss_weight
+        model.bce_loss_weight  = args.bce_loss_weight
+        model.out_dim          = args.out_dim
+        model.seg_token_idx    = args.seg_token_idx
+
     model.config.eos_token_id = tokenizer.eos_token_id
     model.config.bos_token_id = tokenizer.bos_token_id
     model.config.pad_token_id = tokenizer.pad_token_id
@@ -167,11 +181,25 @@ def main(args):
     model.enable_input_require_grads()
     model.gradient_checkpointing_enable()
 
+
+    # --- INIT BLOCK (fixed) ---
+
+    # Always build/wire the CLIP vision wrapper (safe with merged HF models)
     model.get_model().initialize_vision_modules(model.get_model().config)
+
+    # Move the vision tower to the right device/dtype
     vision_tower = model.get_model().get_vision_tower()
     vision_tower.to(dtype=torch_dtype, device=args.local_rank)
-    if not args.eval_only:
+
+    # IMPORTANT:
+    # Only re-init LISA modules when you're training from *backbones*.
+    # Skip this when starting from a merged HF model to avoid overwriting.
+    if (not args.hf_merged_model) and (not args.eval_only):
         model.get_model().initialize_lisa_modules(model.get_model().config)
+    # --- END INIT BLOCK ---
+
+
+
 
     for p in vision_tower.parameters():
         p.requires_grad = False
@@ -275,7 +303,7 @@ def main(args):
         print(f"Training with {len(train_dataset)} examples.")
 
     ds_config = {
-        "train_micro_batch_size_per_gpu": 1,
+        "train_micro_batch_size_per_gpu": args.batch_size,
         "gradient_accumulation_steps": args.grad_accumulation_steps,
         "optimizer": {
             "type": "AdamW",
