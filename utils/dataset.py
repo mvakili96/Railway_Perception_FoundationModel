@@ -182,6 +182,7 @@ class HybridDataset(torch.utils.data.Dataset):
         refer_seg_data="refclef||refcoco||refcoco+||refcocog",
         vqa_data="llava_instruct_150k",
         reason_seg_data="ReasonSeg|train",
+        reason_seg_rail_data="ReasonSegRail|train",
         explanatory=0.1,
     ):
         self.exclude_val = exclude_val
@@ -255,6 +256,22 @@ class HybridDataset(torch.utils.data.Dataset):
                         num_classes_per_sample,
                         exclude_val,
                         reason_seg_data,
+                        explanatory,
+                    )
+                )
+
+            elif dataset == "reason_seg_rail":
+                self.all_datasets.append(
+                    ReasonSegDataset(
+                        base_image_dir,
+                        tokenizer,
+                        vision_tower,
+                        samples_per_epoch,
+                        precision,
+                        image_size,
+                        num_classes_per_sample,
+                        exclude_val,
+                        reason_seg_rail_data,
                         explanatory,
                     )
                 )

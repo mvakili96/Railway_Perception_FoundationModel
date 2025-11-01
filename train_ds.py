@@ -72,6 +72,7 @@ def parse_args(args):
     )
     parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
     parser.add_argument("--reason_seg_data", default="ReasonSeg|train", type=str)
+    parser.add_argument("--reason_seg_rail_data", default="ReasonSegRail|train", type=str)
     parser.add_argument("--val_dataset", default="ReasonSeg|val", type=str)
     parser.add_argument("--dataset_dir", default="./dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
@@ -284,6 +285,7 @@ def main(args):
         refer_seg_data=args.refer_seg_data,
         vqa_data=args.vqa_data,
         reason_seg_data=args.reason_seg_data,
+        reason_seg_rail_data=args.reason_seg_rail_data,
         explanatory=args.explanatory,
     )
 
