@@ -36,6 +36,25 @@ def init_mapillary(base_image_dir):
     return mapillary_classes, mapillary_images, mapillary_labels
 
 
+def init_railsem(base_image_dir):
+    railsem_data_root = os.path.join(base_image_dir, "RailSem19-SemSeg-LISA")
+    with open(os.path.join(railsem_data_root, "config_v2.0.json")) as f:
+        railsem_classes = json.load(f)["labels"]
+    railsem_classes = [x["readable"].lower() for x in railsem_classes]
+    railsem_classes = np.array(railsem_classes)
+    railsem_labels = sorted(
+        glob.glob(
+            os.path.join(railsem_data_root, "training", "v2.0", "labels", "*.png")
+        )
+    )
+    railsem_images = [
+        x.replace(".png", ".jpg").replace("v2.0/labels", "images")
+        for x in railsem_labels
+    ]
+    print("railsem: ", len(railsem_images))
+    return railsem_classes, railsem_images, railsem_labels
+    
+
 def init_ade20k(base_image_dir):
     with open("utils/ade20k_classes.json", "r") as f:
         ade20k_classes = json.load(f)
@@ -235,13 +254,19 @@ class SemSegDataset(torch.utils.data.Dataset):
                     name = sampled_cls
                 sampled_classes.append(name)
 
-        elif ds in ["ade20k", "cocostuff", "mapillary"]:
+        elif ds in ["ade20k", "cocostuff", "mapillary", "railsem"]:
             image, labels = self.data2list[ds]
             idx = random.randint(0, len(image) - 1)
             image_path = image[idx]
             label_path = labels[idx]
             label = Image.open(label_path)
             label = np.array(label)
+
+            if ds == "railsem":
+                # My version of RailSem uses indexed labels, extract first channel
+                if label.ndim == 3:
+                    label = label[:, :, 0]
+            
             if ds == "ade20k":
                 label[label == 0] = 255
                 label -= 1
