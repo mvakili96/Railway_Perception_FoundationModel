@@ -59,6 +59,49 @@ def sigmoid_ce_loss(
     return loss
 
 
+def bootstrapped_ce_loss(
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    num_masks: float,
+):
+    """
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    Returns:
+        Loss tensor
+    """
+    # Bootstrapped BCE: keep only hard pixels per mask.
+    bootstrap_ratio = 0.25
+    bootstrap_thresh = 0.1
+
+    loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    loss = loss.flatten(1)
+
+    k = max(1, int(loss.shape[1] * bootstrap_ratio))
+    sorted_loss, _ = torch.sort(loss, dim=1, descending=True)
+    topk_loss = sorted_loss[:, :k]
+
+    thresholded_loss = torch.where(
+        topk_loss > bootstrap_thresh,
+        topk_loss,
+        torch.zeros_like(topk_loss),
+    )
+    valid_counts = (topk_loss > bootstrap_thresh).sum(dim=1, keepdim=True)
+    fallback_loss = topk_loss.mean(dim=1)
+    bootstrapped_loss = torch.where(
+        valid_counts.squeeze(1) > 0,
+        thresholded_loss.sum(dim=1) / valid_counts.squeeze(1).clamp_min(1),
+        fallback_loss,
+    )
+
+    loss = bootstrapped_loss.sum() / (num_masks + 1e-8)
+    return loss
+
+
 class LisaMetaModel:
     def __init__(
         self,
