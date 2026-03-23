@@ -124,7 +124,12 @@ def parse_args(args):
 def main(args):
     args = parse_args(args)
     args.log_dir = os.path.join(args.log_base_dir, args.exp_name)
-    if args.local_rank == 0:
+    args.global_rank = int(os.environ.get("RANK", "0"))
+    args.world_size = int(
+        os.environ.get("WORLD_SIZE", str(max(torch.cuda.device_count(), 1)))
+    )
+    args.is_main_process = args.global_rank == 0
+    if args.is_main_process:
         os.makedirs(args.log_dir, exist_ok=True)
         writer = SummaryWriter(args.log_dir)
     else:
@@ -265,7 +270,7 @@ def main(args):
             print("n: ", n, "p.shape: ", p.shape)
             p.requires_grad = True
 
-    world_size = torch.cuda.device_count()
+    world_size = args.world_size
     args.distributed = world_size > 1
     train_dataset = HybridDataset(
         args.dataset_dir,
@@ -424,7 +429,7 @@ def main(args):
 
         if args.no_eval or is_best:
             save_dir = os.path.join(args.log_dir, "ckpt_model")
-            if args.local_rank == 0:
+            if args.is_main_process == 0:
                 torch.save(
                     {"epoch": epoch},
                     os.path.join(
@@ -435,7 +440,7 @@ def main(args):
                     ),
                 )
                 if os.path.exists(save_dir):
-                    shutil.rmtree(save_dir)
+                    shutil.rmtree(save_dir, ignore_errors=True)
             torch.distributed.barrier()
             model_engine.save_checkpoint(save_dir)
 
@@ -526,7 +531,7 @@ def train(
                 mask_dice_losses.all_reduce()
                 mask_losses.all_reduce()
 
-            if args.local_rank == 0:
+            if args.is_main_process:
                 progress.display(global_step + 1)
                 writer.add_scalar("train/loss", losses.avg, global_step)
                 writer.add_scalar("train/ce_loss", ce_losses.avg, global_step)
@@ -554,7 +559,7 @@ def train(
 
         if global_step != 0:
             curr_lr = scheduler.get_last_lr()
-            if args.local_rank == 0:
+            if args.is_main_process:
                 writer.add_scalar("train/lr", curr_lr[0], global_step)
 
     return train_iter
