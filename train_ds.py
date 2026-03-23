@@ -429,7 +429,7 @@ def main(args):
 
         if args.no_eval or is_best:
             save_dir = os.path.join(args.log_dir, "ckpt_model")
-            if args.is_main_process == 0:
+            if args.is_main_process:
                 torch.save(
                     {"epoch": epoch},
                     os.path.join(
@@ -617,7 +617,7 @@ def validate(val_loader, model_engine, epoch, writer, args):
     ciou = iou_class[1]
     giou = acc_iou_meter.avg[1]
 
-    if args.local_rank == 0:
+    if args.is_main_process:
         writer.add_scalar("val/giou", giou, epoch)
         writer.add_scalar("val/ciou", ciou, epoch)
         print("giou: {:.4f}, ciou: {:.4f}".format(giou, ciou))
