@@ -47,7 +47,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         self.image_size = image_size
         self.tokenizer = tokenizer
         self.precision = precision
-        self.transform = ResizeLongestSide(image_size)
+        self.transform = ResizeLongestSide(image_size, allow_upscale=False)
         self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
 
         self.short_question_list = SHORT_QUESTION_LIST

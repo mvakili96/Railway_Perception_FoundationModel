@@ -346,7 +346,7 @@ class ValDataset(torch.utils.data.Dataset):
         self.ds = ds
         self.image_size = image_size
         self.tokenizer = tokenizer
-        self.transform = ResizeLongestSide(image_size)
+        self.transform = ResizeLongestSide(image_size, allow_upscale=False)
         self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
 
     def __len__(self):

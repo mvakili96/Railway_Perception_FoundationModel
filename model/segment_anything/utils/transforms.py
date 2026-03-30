@@ -21,15 +21,16 @@ class ResizeLongestSide:
     transforming both numpy array and batched torch tensors.
     """
 
-    def __init__(self, target_length: int) -> None:
+    def __init__(self, target_length: int, allow_upscale: bool = True) -> None:
         self.target_length = target_length
+        self.allow_upscale = allow_upscale
 
     def apply_image(self, image: np.ndarray) -> np.ndarray:
         """
         Expects a numpy array with shape HxWxC in uint8 format.
         """
         target_size = self.get_preprocess_shape(
-            image.shape[0], image.shape[1], self.target_length
+            image.shape[0], image.shape[1], self.target_length, allow_upscale=self.allow_upscale
         )
         return np.array(resize(to_pil_image(image), target_size))
 
@@ -42,7 +43,7 @@ class ResizeLongestSide:
         """
         old_h, old_w = original_size
         new_h, new_w = self.get_preprocess_shape(
-            original_size[0], original_size[1], self.target_length
+            original_size[0], original_size[1], self.target_length, allow_upscale=self.allow_upscale
         )
         coords = deepcopy(coords).astype(float)
         coords[..., 0] = coords[..., 0] * (new_w / old_w)
@@ -67,7 +68,7 @@ class ResizeLongestSide:
         """
         # Expects an image in BCHW format. May not exactly match apply_image.
         target_size = self.get_preprocess_shape(
-            image.shape[0], image.shape[1], self.target_length
+            image.shape[0], image.shape[1], self.target_length, allow_upscale=self.allow_upscale
         )
         return F.interpolate(
             image, target_size, mode="bilinear", align_corners=False, antialias=True
@@ -82,7 +83,7 @@ class ResizeLongestSide:
         """
         old_h, old_w = original_size
         new_h, new_w = self.get_preprocess_shape(
-            original_size[0], original_size[1], self.target_length
+            original_size[0], original_size[1], self.target_length, allow_upscale=self.allow_upscale
         )
         coords = deepcopy(coords).to(torch.float)
         coords[..., 0] = coords[..., 0] * (new_w / old_w)
@@ -101,12 +102,14 @@ class ResizeLongestSide:
 
     @staticmethod
     def get_preprocess_shape(
-        oldh: int, oldw: int, long_side_length: int
+        oldh: int, oldw: int, long_side_length: int, allow_upscale: bool = True
     ) -> Tuple[int, int]:
         """
         Compute the output size given input size and target long side length.
         """
         scale = long_side_length * 1.0 / max(oldh, oldw)
+        if not allow_upscale:
+            scale = min(scale, 1.0)
         newh, neww = oldh * scale, oldw * scale
         neww = int(neww + 0.5)
         newh = int(newh + 0.5)

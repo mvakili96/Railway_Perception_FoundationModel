@@ -149,7 +149,7 @@ vision_tower = model.get_model().get_vision_tower()
 vision_tower.to(device=args.local_rank)
 
 clip_image_processor = CLIPImageProcessor.from_pretrained(model.config.vision_tower)
-transform = ResizeLongestSide(args.image_size)
+transform = ResizeLongestSide(args.image_size, allow_upscale=False)
 
 model.eval()
 
