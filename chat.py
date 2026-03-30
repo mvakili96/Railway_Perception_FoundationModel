@@ -43,6 +43,11 @@ def parse_args(args):
         type=str,
         choices=["llava_v1", "llava_llama_2"],
     )
+    
+    parser.add_argument("--prompt", type=str, required=True)
+    parser.add_argument("--image_path", type=str, required=True)
+
+
     return parser.parse_args(args)
 
 
@@ -150,12 +155,15 @@ def main(args):
     transform = ResizeLongestSide(args.image_size, allow_upscale=False)
 
     model.eval()
-
-    while True:
+    
+    flag_HPC_demo = True
+    while flag_HPC_demo:
+        flag_HPC_demo = False
         conv = conversation_lib.conv_templates[args.conv_type].copy()
         conv.messages = []
 
-        prompt = input("Please input your prompt: ")
+        # prompt = input("Please input your prompt: ")
+        prompt = args.prompt
         prompt = DEFAULT_IMAGE_TOKEN + "\n" + prompt
         if args.use_mm_start_end:
             replace_token = (
@@ -167,7 +175,8 @@ def main(args):
         conv.append_message(conv.roles[1], "")
         prompt = conv.get_prompt()
 
-        image_path = input("Please input the image path: ")
+        # image_path = input("Please input the image path: ")
+        image_path = args.image_path
         if not os.path.exists(image_path):
             print("File not found in {}".format(image_path))
             continue
