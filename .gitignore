@@ -1,6 +1,7 @@
 **/__pycache__
 runs/
 .vscode/
+.DS_Store
 LISA-7B-v1/
 LISA-7B/
 LLaVA-Lightning-7B-v1-1/
