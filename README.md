@@ -1,333 +1,146 @@
-[![Gradio](https://img.shields.io/badge/Gradio-Online%20Demo-blue)](http://103.170.5.190:7860/)
-[![Open in OpenXLab](https://cdn-static.openxlab.org.cn/app-center/openxlab_app.svg)](https://openxlab.org.cn/apps/detail/openxlab-app/LISA)
+# Reasoning-guided Ego-path Segmentation for Autonomous Trains
 
-# LISA: Reasoning Segmentation via Large Language Model
+[![Built on LISA (CVPR 2024)](https://img.shields.io/badge/Built%20on-LISA%20(CVPR%202024)-blue)](https://github.com/JIA-Lab-research/LISA)
 
-<font size=7><div align='center'><b>LISA</b>: Large <b>L</b>anguage <b>I</b>nstructed <b>S</b>egmentation <b>A</b>ssistant</div></font>
+Official repository for the paper:
+**Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models**.
 
-<font size=7><div align='center'>
-    <a href="https://arxiv.org/pdf/2308.00692.pdf"><strong>Paper</strong></a> | 
-    <a href="https://huggingface.co/xinlai"><strong>Models</strong></a> | 
-    <a href="#training"><strong>Training</strong></a> | 
-    <a href="#inference"><strong>Inference</strong></a> | 
-    <a href="#deployment"><strong>Local Deployment</strong></a> | 
-    <a href="#dataset"><strong>Dataset</strong></a> | 
-    <a href=""><strong>Online Demo</strong></a> | 
-    <a href="https://huggingface.co/collections/Senqiao/lisa-67713837a32d6abf516a162e"><strong>LISA++ Dataset</strong></a> | 
-    <a href="https://huggingface.co/Senqiao/LISA_Plus_7b"><strong>LISA++ Model</strong></a>
-</div></font>
+This project is a railway-domain adaptation of LISA and is **forked from / built upon** the original LISA repository:
+[https://github.com/JIA-Lab-research/LISA](https://github.com/JIA-Lab-research/LISA)
 
-<!-- <p align="center"> <img src="imgs/teaser.jpg" width="100%"> </p> -->
+## Overview
+Autonomous train perception in switch regions is not only a segmentation problem, but also a reasoning problem.
+Given a forward-facing rail image and a language query, the model predicts:
+1. The valid **ego-path mask**.
+2. An optional **textual explanation** grounded in switch geometry (blade-stock contact, rail gap, path continuity).
 
-<table class="center">
-<tr>
-  <td style="text-align:center;"><b>Input</b></td>
-  <td style="text-align:center;"><b>Output</b></td>
-  <td style="text-align:center;"><b>Input</b></td>
-  <td style="text-align:center;"><b>Output</b></td>
-</tr>
-<tr>
-  <td><img src="imgs/obama.jpg"></td>
-  <td><img src="vis_output/obama.jpg"></td>
-  <td><img src="imgs/trump.jpg"></td>              
-  <td><img src="vis_output/trump.jpg"></td>
-</tr>
-<tr>
-  <td width=25% style="text-align:center;color:gray;">"Who was <ins>the president of the US</ins> in this image? Please output segmentation mask and explain the reason."</td>
-  <td width=25% style="text-align:center;">"Sure, the segmentation result is [SEG]. The President of the United States in the image is <ins>President Obama.</ins>”</td>
-  <td width=25% style="text-align:center;color:gray">"Who was <ins>the president of the US</ins> in this image? Please output segmentation mask and explain why."</td>
-  <td width=25% style="text-align:center;">"Sure, [SEG]. In the image, the President of the United States is <ins>President Trump.</ins>"</td>
-</tr>
+## Highlights from the Attached Paper
+- Railway switch understanding is formulated as **reasoning-guided ego-path segmentation**.
+- LISA is adapted with rail-specific prompts, polygon masks, and explanation supervision.
+- Initial evaluation uses RailSem19-based split (final 2,500 images for validation/testing protocol).
+- Strong gains over base LISA checkpoint are reported under both reasoning and simple prompts.
 
-<tr>
-  <td><img src="imgs/stand_higher.jpg"></td>
-  <td><img src="vis_output/stand_higher.jpg"></td>
-  <td><img src="imgs/camera_lens.jpg"></td>              
-  <td><img src="vis_output/camera_lens.jpg"></td>
-</tr>
-<tr>
-  <td width=25% style="text-align:center;color:gray;">"What can <ins>make the woman stand higher</ins>? Please output segmentation mask and explain why."</td>
-  <td width=25% style="text-align:center;">"Sure, [SEG]. The woman is <ins>standing higher by using a ladder</ins>..."</td>
-  <td width=25% style="text-align:center;color:gray">"Can you segment <ins>the camera lens that is more suitable for photographing nearby objects</ins> in this image?"</td>
-  <td width=25% style="text-align:center;">"Sure, [SEG]."</td>
-</tr>
+### Reported Performance
+Prompt A: `By examining rail continuity and switch geometry, segment the active ego-route.`
 
-<tr>
-  <td><img src="imgs/dog_with_horn.jpg"></td>
-  <td><img src="vis_output/dog_with_horn.jpg"></td>
-  <td><img src="imgs/wash_hands.jpg"></td>              
-  <td><img src="vis_output/wash_hands.jpg"></td>
-</tr>
-<tr>
-  <td width=25% style="text-align:center;color:gray;">"Can you segment <ins>the unusual part</ins> in this image and explain why."</td>
-  <td width=25% style="text-align:center;">"Sure, it is [SEG]. In the image, the unusual part is <ins>the dog wearing a reindeer antler headband</ins>..."</td>
-  <td width=25% style="text-align:center;color:gray">"Where to <ins>wash hands</ins> in this image? Please output segmentation mask."</td>
-  <td width=25% style="text-align:center;">"Sure, [SEG]."</td>
-</tr>
+Prompt B: `Segment the track bed in this image.`
 
-<tr>
-  <td><img src="imgs/jackma.jpg"></td>
-  <td><img src="vis_output/jackma.jpg"></td>
-  <td><img src="imgs/blackpink.jpg"></td>              
-  <td><img src="vis_output/blackpink.jpg"></td>
-</tr>
-<tr>
-  <td width=25% style="text-align:center;color:gray;">"Can you segment <ins>the founder of Alibaba</ins> in this image and explain why?"</td>
-  <td width=25% style="text-align:center;">"Sure, it is [SEG]. In the image, the man wearing a red tie and sitting on one of the chairs is <ins>Jack Ma</ins>, the co-founder of Alibaba Group..."</td>
-  <td width=25% style="text-align:center;color:gray">"Please segment <ins>Lisa</ins> in this figure."</td>
-  <td width=25% style="text-align:center;">"Sure, [SEG]."</td>
-</tr>
-</table>
+| Model | A CIoU (%) | A GIoU (%) | B CIoU (%) | B GIoU (%) |
+|---|---:|---:|---:|---:|
+| LISA (base) | 52.3 | 54.1 | 24.8 | 25.2 |
+| Rail-finetuned LISA | **81.7** | **83.4** | **81.9** | **83.0** |
 
-<p align="center"> <img src="imgs/fig_overview.jpg" width="100%"> </p>
+<br>
 
-## News
-- [x] [2024.12.30] We released the [LISA++](https://arxiv.org/abs/2312.17240) model and datasets, available [here](https://huggingface.co/collections/Senqiao/lisa-67713837a32d6abf516a162e). Our findings show that incorporating Visual COT data can further enhance the model’s global understanding. We will update the paper soon, stay tuned!
-- [x] [2024.6.21] LISA is selected as Oral Presentation in CVPR 2024!
-- [x] [2023.8.30] Release three new models [LISA-7B-v1](https://huggingface.co/xinlai/LISA-7B-v1), [LISA-7B-v1-explanatory](https://huggingface.co/xinlai/LISA-7B-v1-explanatory), and [LISA-13B-llama2-v1-explanatory](https://huggingface.co/xinlai/LISA-13B-llama2-v1-explanatory). Welcome to check them out!
-- [x] [2023.8.23] Refactor code, and release new model [LISA-13B-llama2-v1](https://huggingface.co/xinlai/LISA-13B-llama2-v1). Welcome to check it out!
-- [x] [2023.8.9] Training code is released!
-- [x] [2023.8.4] [Online Demo](http://103.170.5.190:7860/) is released! 
-- [x] [2023.8.4] [*ReasonSeg* Dataset](https://drive.google.com/drive/folders/125mewyg5Ao6tZ3ZdJ-1-E3n04LGVELqy?usp=sharing) and the [LISA-13B-llama2-v0-explanatory](https://huggingface.co/xinlai/LISA-13B-llama2-v0-explanatory) model are released! 
-- [x] [2023.8.3] Inference code and the [LISA-13B-llama2-v0](https://huggingface.co/xinlai/LISA-13B-llama2-v0) model are released. Welcome to check them out!
-- [x] [2023.8.2] [Paper](https://arxiv.org/pdf/2308.00692.pdf) is released and GitHub repo is created.
+### Multimodal finetuning flowchart for a sample data
+This flowchart summarizes the multimodal finetuning pipeline used in this project. Following the LISA design, the training stream mixes semantic rail supervision with rail reasoning segmentation supervision: semantic samples teach the model broad rail scene context, while reasoning samples teach it to choose the valid ego-route from switch geometry and language prompts. The random branching in the pipeline reflects how the model alternates between segmentation-only supervision and explanation-aware supervision during training.
 
-**LISA: Reasoning Segmentation via Large Language Model [[Paper](https://arxiv.org/abs/2308.00692)]** <br />
-[Xin Lai](https://scholar.google.com/citations?user=tqNDPA4AAAAJ&hl=zh-CN),
-[Zhuotao Tian](https://scholar.google.com/citations?user=mEjhz-IAAAAJ&hl=en),
-[Yukang Chen](https://scholar.google.com/citations?user=6p0ygKUAAAAJ&hl=en),
-[Yanwei Li](https://scholar.google.com/citations?user=I-UCPPcAAAAJ&hl=zh-CN),
-[Yuhui Yuan](https://scholar.google.com/citations?user=PzyvzksAAAAJ&hl=en),
-[Shu Liu](https://scholar.google.com.hk/citations?user=BUEDUFkAAAAJ&hl=zh-CN),
-[Jiaya Jia](https://scholar.google.com/citations?user=XPAkzTEAAAAJ&hl=en)<br />
+<br>
 
-**LISA++: An Improved Baseline for Reasoning Segmentation with Large Language Model [[Paper](https://arxiv.org/abs/2312.17240)]** <br />
-[Senqiao Yang](https://scholar.google.com/citations?user=NcJc-RwAAAAJ),
-Tianyuan Qu,
-[Xin Lai](https://scholar.google.com/citations?user=tqNDPA4AAAAJ&hl=zh-CN),
-[Zhuotao Tian](https://scholar.google.com/citations?user=mEjhz-IAAAAJ&hl=en),
-[Bohao Peng](https://scholar.google.com.hk/citations?user=9xcCm1oAAAAJ),
-[Shu Liu](https://scholar.google.com.hk/citations?user=BUEDUFkAAAAJ&hl=zh-CN),
-[Jiaya Jia](https://scholar.google.com/citations?user=XPAkzTEAAAAJ&hl=en)<br />
+![Figure 1 Placeholder](docs/paper_figures/flowchart.png)
 
-## Abstract
-In this work, we propose a new segmentation task --- ***reasoning segmentation***. The task is designed to output a segmentation mask given a complex and implicit query text. We establish a benchmark comprising over one thousand image-instruction pairs, incorporating intricate reasoning and world knowledge for evaluation purposes. Finally, we present LISA: Large-language Instructed Segmentation Assistant, which inherits the language generation capabilities of the multi-modal Large Language Model (LLM) while also possessing the ability to produce segmentation masks.
-For more details, please refer to the [paper](https://arxiv.org/abs/2308.00692).
+<br>
 
-## Highlights
-**LISA** unlocks the new segmentation capabilities of multi-modal LLMs, and can handle cases involving: 
-1. complex reasoning; 
-2. world knowledge; 
-3. explanatory answers; 
-4. multi-turn conversation. 
+### Qualitative results (success / inconsistency / failure cases)
+This figure highlights both the strengths and current limitations of the rail-finetuned model. The input query here is: "By examining rail continuity and switch geometry, segment the active ego-route and explain why". Some examples show accurate ego-path masks with coherent explanations, while others reveal a gap between mask prediction and verbal reasoning: the mask may be correct but the explanation may contradict the visible switch geometry, and in harder scenes the explanation can be partially plausible even when the predicted mask fails. These cases are useful for understanding where stronger supervision and more faithful reasoning evaluation are still needed.
 
-**LISA** also demonstrates robust zero-shot capability when trained exclusively on reasoning-free datasets. In addition, fine-tuning the model with merely 239 reasoning segmentation image-instruction pairs results in further performance enhancement.
+<br>
 
-## Experimental results
-<p align="center"> <img src="imgs/table1.jpg" width="80%"> </p>
+![Figure 2 Placeholder](docs/paper_figures/results.png)
 
-## Installation
-```
-pip install -r requirements.txt
-pip install flash-attn --no-build-isolation
-```
+<br>
 
-## Training
-### Training Data Preparation
-The training data consists of 4 types of data:
+## What Changed vs Original LISA
+- Added rail reasoning dataset branch: `reason_seg_rail` (`ReasonSegRail|train`).
+- Added rail semantic segmentation support: `railsem` in `utils/sem_seg_dataset.py`.
+- Added training flow for merged HF checkpoints via `--hf_merged_model`.
+- Added HPC pipeline scripts:
+  - `fine_tune_LISA.sbatch`
+  - `fine_tune_LISA_nodes.sbatch`
+  - `merge_LISA.sbatch`
 
-1. Semantic segmentation datasets: [ADE20K](http://data.csail.mit.edu/places/ADEchallenge/ADEChallengeData2016.zip), [COCO-Stuff](http://calvin.inf.ed.ac.uk/wp-content/uploads/data/cocostuffdataset/stuffthingmaps_trainval2017.zip), [Mapillary](https://www.mapillary.com/dataset/vistas), [PACO-LVIS](https://github.com/facebookresearch/paco/tree/main#dataset-setup), [PASCAL-Part](https://github.com/facebookresearch/VLPart/tree/main/datasets#pascal-part), [COCO Images](http://images.cocodataset.org/zips/train2017.zip)
-
-    Note: For COCO-Stuff, we use the annotation file stuffthingmaps_trainval2017.zip. We only use the PACO-LVIS part in PACO. COCO Images should be put into the `dataset/coco/` directory.
-
-3. Referring segmentation datasets: [refCOCO](https://web.archive.org/web/20220413011718/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco.zip), [refCOCO+](https://web.archive.org/web/20220413011656/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcoco+.zip), [refCOCOg](https://web.archive.org/web/20220413012904/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refcocog.zip), [refCLEF](https://web.archive.org/web/20220413011817/https://bvisionweb1.cs.unc.edu/licheng/referit/data/refclef.zip) ([saiapr_tc-12](https://web.archive.org/web/20220515000000/http://bvisionweb1.cs.unc.edu/licheng/referit/data/images/saiapr_tc-12.zip)) 
-
-    Note: the original links of refCOCO series data are down, and we update them with new ones. If the download speed is super slow or unstable, we also provide a [OneDrive link](https://mycuhk-my.sharepoint.com/:f:/g/personal/1155154502_link_cuhk_edu_hk/Em5yELVBvfREodKC94nOFLoBLro_LPxsOxNV44PHRWgLcA?e=zQPjsc) to download. **You must also follow the rules that the original datasets require.**
-
-4. Visual Question Answering dataset: [LLaVA-Instruct-150k](https://huggingface.co/datasets/liuhaotian/LLaVA-Instruct-150K/blob/main/llava_instruct_150k.json)
-
-5. Reasoning segmentation dataset: [ReasonSeg](https://github.com/dvlab-research/LISA#dataset)
-
-Download them from the above links, and organize them as follows.
-
-```
+## Dataset Layout
+```text
 ├── dataset
-│   ├── ade20k
-│   │   ├── annotations
-│   │   └── images
-│   ├── coco
-│   │   └── train2017
-│   │       ├── 000000000009.jpg
-│   │       └── ...
-│   ├── cocostuff
-│   │   └── train2017
-│   │       ├── 000000000009.png
-│   │       └── ...
-│   ├── llava_dataset
-│   │   └── llava_instruct_150k.json
-│   ├── mapillary
-│   │   ├── config_v2.0.json
-│   │   ├── testing
-│   │   ├── training
-│   │   └── validation
 │   ├── reason_seg
-│   │   └── ReasonSeg
+│   │   └── ReasonSegRail
 │   │       ├── train
 │   │       ├── val
 │   │       └── explanatory
-│   ├── refer_seg
-│   │   ├── images
-│   │   |   ├── saiapr_tc-12 
-│   │   |   └── mscoco
-│   │   |       └── images
-│   │   |           └── train2014
-│   │   ├── refclef
-│   │   ├── refcoco
-│   │   ├── refcoco+
-│   │   └── refcocog
-│   └── vlpart
-│       ├── paco
-│       │   └── annotations
-│       └── pascal_part
-│           ├── train.json
-│           └── VOCdevkit
+│   ├── RailSem19-SemSeg-LISA
+│   │   ├── config_v2.0.json
+│   │   ├── training
 ```
+Please note that we are still actively improving this method and expect to introduce newer versions of both the model and the dataset. Because the dataset may be expanded, refined, or restructured as the project evolves, we have not released the full data here yet and it will remain unavailable until further notice.
+
+## HPC Slurm Workflow
+This repo includes cluster scripts for Apptainer-based training and merging.
 
 ### Pre-trained weights
 
 #### LLaVA
-To train LISA-7B or 13B, you need to follow the [instruction](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md) to merge the LLaVA delta weights. Typically, we use the final weights `LLaVA-Lightning-7B-v1-1` and `LLaVA-13B-v1-1` merged from `liuhaotian/LLaVA-Lightning-7B-delta-v1-1` and `liuhaotian/LLaVA-13b-delta-v1-1`, respectively. For Llama2, we can directly use the LLaVA full weights `liuhaotian/llava-llama-2-13b-chat-lightning-preview`.
+To train LISA-7B or 13B, you need to follow the [instruction](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md) to merge the LLaVA delta weights. Typically, LISA authors use the final weights `LLaVA-Lightning-7B-v1-1` and `LLaVA-13B-v1-1` merged from `liuhaotian/LLaVA-Lightning-7B-delta-v1-1` and `liuhaotian/LLaVA-13b-delta-v1-1`, respectively. For Llama2, you can directly use the LLaVA full weights `liuhaotian/llava-llama-2-13b-chat-lightning-preview`.
 
 #### SAM ViT-H weights
 Download SAM ViT-H pre-trained weights from the [link](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth).
 
-### Training
-```
-deepspeed --master_port=24999 train_ds.py \
-  --version="PATH_TO_LLaVA" \
-  --dataset_dir='./dataset' \
-  --vision_pretrained="PATH_TO_SAM" \
-  --dataset="sem_seg||refer_seg||vqa||reason_seg" \
-  --sample_rates="9,3,3,1" \
-  --exp_name="lisa-7b"
-```
-When training is finished, to get the full model weight:
-```
-cd ./runs/lisa-7b/ckpt_model && python zero_to_fp32.py . ../pytorch_model.bin
-```
+### Container Setup
+The Slurm scripts expect an Apptainer/Singularity image file (`.sif`) referenced by the `IMG` variable inside the scripts. The container used for this project is available from DockerHub:
+[https://hub.docker.com/repositories/mvakili96](https://hub.docker.com/repositories/mvakili96)
 
-### Merge LoRA Weight
-Merge the LoRA weights of `pytorch_model.bin`, save the resulting model into your desired path in the Hugging Face format:
-```
-CUDA_VISIBLE_DEVICES="" python merge_lora_weights_and_save_hf_model.py \
-  --version="PATH_TO_LLaVA" \
-  --weight="PATH_TO_pytorch_model.bin" \
-  --save_path="PATH_TO_SAVED_MODEL"
-```
-
-For example:
-```
-CUDA_VISIBLE_DEVICES="" python3 merge_lora_weights_and_save_hf_model.py \
-  --version="./LLaVA/LLaVA-Lightning-7B-v1-1" \
-  --weight="lisa-7b/pytorch_model.bin" \
-  --save_path="./LISA-7B"
-```
-
-### Validation
-```
-deepspeed --master_port=24999 train_ds.py \
-  --version="PATH_TO_LISA_HF_Model_Directory" \
-  --dataset_dir='./dataset' \
-  --vision_pretrained="PATH_TO_SAM" \
-  --exp_name="lisa-7b" \
-  --eval_only
-```
-
-Note: the `v1` model is trained using both `train+val` sets, so please use the `v0` model to reproduce the validation results. (To use the `v0` models, please first checkout to the legacy version repo with `git checkout 0e26916`.)
-
- 
-## Inference 
-
-To chat with [LISA-13B-llama2-v1](https://huggingface.co/xinlai/LISA-13B-llama2-v1) or [LISA-13B-llama2-v1-explanatory](https://huggingface.co/xinlai/LISA-13B-llama2-v1-explanatory):
-(Note that `chat.py` currently does not support `v0` models (i.e., `LISA-13B-llama2-v0` and `LISA-13B-llama2-v0-explanatory`), if you want to use the `v0` models, please first checkout to the legacy version repo `git checkout 0e26916`.)
-```
-CUDA_VISIBLE_DEVICES=0 python chat.py --version='xinlai/LISA-13B-llama2-v1'
-CUDA_VISIBLE_DEVICES=0 python chat.py --version='xinlai/LISA-13B-llama2-v1-explanatory'
-```
-To use `bf16` or `fp16` data type for inference:
-```
-CUDA_VISIBLE_DEVICES=0 python chat.py --version='xinlai/LISA-13B-llama2-v1' --precision='bf16'
-```
-To use `8bit` or `4bit` data type for inference (this enables running 13B model on a single 24G or 12G GPU at some cost of generation quality):
-```
-CUDA_VISIBLE_DEVICES=0 python chat.py --version='xinlai/LISA-13B-llama2-v1' --precision='fp16' --load_in_8bit
-CUDA_VISIBLE_DEVICES=0 python chat.py --version='xinlai/LISA-13B-llama2-v1' --precision='fp16' --load_in_4bit
-```
-Hint: for 13B model, 16-bit inference consumes 30G VRAM with a single GPU, 8-bit inference consumes 16G, and 4-bit inference consumes 9G.
-
-After that, input the text prompt and then the image path. For example，
-```
-- Please input your prompt: Where can the driver see the car speed in this image? Please output segmentation mask.
-- Please input the image path: imgs/example1.jpg
-
-- Please input your prompt: Can you segment the food that tastes spicy and hot?
-- Please input the image path: imgs/example2.jpg
-```
-The results should be like:
-<p align="center"> <img src="imgs/example1.jpg" width="22%"> <img src="vis_output/example1_masked_img_0.jpg" width="22%"> <img src="imgs/example2.jpg" width="25%"> <img src="vis_output/example2_masked_img_0.jpg" width="25%"> </p>
-
-## Deployment
-```
-CUDA_VISIBLE_DEVICES=0 python app.py --version='xinlai/LISA-13B-llama2-v1 --load_in_4bit'
-CUDA_VISIBLE_DEVICES=0 python app.py --version='xinlai/LISA-13B-llama2-v1-explanatory --load_in_4bit'
-```
-By default, we use 4-bit quantization. Feel free to delete the `--load_in_4bit` argument for 16-bit inference or replace it with `--load_in_8bit` argument for 8-bit inference.
+Pull or build the corresponding container image, convert it to a `.sif` if needed for your cluster, and update the `IMG` path in the Slurm scripts before launching jobs.
 
 
-## Dataset
-In ReasonSeg, we have collected 1218 images (239 train, 200 val, and 779 test). The training and validation sets can be download from <a href="https://drive.google.com/drive/folders/125mewyg5Ao6tZ3ZdJ-1-E3n04LGVELqy?usp=sharing">**this link**</a>. 
-
-Each image is provided with an annotation JSON file:
-```
-image_1.jpg, image_1.json
-image_2.jpg, image_2.json
-...
-image_n.jpg, image_n.json
-```
-Important keys contained in JSON files:
-```
-- "text": text instructions.
-- "is_sentence": whether the text instructions are long sentences.
-- "shapes": target polygons.
+### Fine-tune
+Edit container/dataset/checkpoint paths in `fine_tune_LISA.sbatch`, then run:
+```bash
+sbatch fine_tune_LISA.sbatch
 ```
 
-The elements of the "shapes" exhibit two categories, namely **"target"** and **"ignore"**. The former category is indispensable for evaluation, while the latter category denotes the ambiguous region and hence disregarded during the evaluation process. 
-
-We provide a <a href="https://github.com/dvlab-research/LISA/blob/main/utils/data_processing.py">**script**</a> that demonstrates how to process the annotations:
-```
-python3 utils/data_processing.py
+If you prefer multi-node, you can run:
+```bash
+sbatch fine_tune_LISA_2nodes.sbatch
 ```
 
-Besides, we leveraged GPT-3.5 for rephrasing instructions, so images in the training set may have **more than one instructions (but fewer than six)** in the "text" field. During training, users may randomly select one as the text query to obtain a better model.
-
-
-## Citation 
-If you find this project useful in your research, please consider citing:
-
+### Merge
+After the fine-tuning is done, in order to get the full model weight, merge the LoRA weights of pytorch_model.bin, and save the resulting model into your desired path in the Hugging Face format, edit paths in `merge_LISA.sbatch`, then run:
+```bash
+sbatch merge_LISA.sbatch
 ```
-@article{lai2023lisa,
+
+### Finetune Script Contrast: `fine_tune_LISA.sbatch` vs `fine_tune_LISA_2nodes.sbatch`
+| Item | `fine_tune_LISA.sbatch` | `fine_tune_LISA_2nodes.sbatch` |
+|---|---|---|
+| Purpose | Single-node fine-tuning | Multi-node distributed fine-tuning |
+| SLURM scale | `--gres=gpu:1` | Typically `--nodes=2` with multiple GPUs per node |
+| Launch style | `deepspeed --num_gpus=$NUM_GPUS ...` | Typically `deepspeed --num_nodes ... --num_gpus ...` (or equivalent multi-node launcher) |
+| Networking | Localhost-style env (`MASTER_ADDR=127.0.0.1`) | Cross-node rendezvous (`MASTER_ADDR` as first node hostname/IP) |
+| Recommended use | Fast debug / small experiments | Paper-scale training (e.g., 2-node, multi-GPU setup) |
+
+
+## Citation
+If this repository is useful for your work, please cite both this paper and LISA.
+
+```bibtex
+@inproceedings{ghorbanalivakili2026railreason,
+  title={Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models},
+  author={Ghorbanalivakili, Mohammadjavad and Varghese, Ashley and Sohn, Gunho},
+  booktitle={Acccepted and to be Published on ISPRS Archives of Photogrammetry and Remote Sensing},
+  year={2026},
+  note={Update final volume/pages/DOI}
+}
+
+@inproceedings{lai2024lisa,
   title={LISA: Reasoning Segmentation via Large Language Model},
   author={Lai, Xin and Tian, Zhuotao and Chen, Yukang and Li, Yanwei and Yuan, Yuhui and Liu, Shu and Jia, Jiaya},
-  journal={arXiv preprint arXiv:2308.00692},
-  year={2023}
-}
-@article{yang2023improved,
-  title={An Improved Baseline for Reasoning Segmentation with Large Language Model},
-  author={Yang, Senqiao and Qu, Tianyuan and Lai, Xin and Tian, Zhuotao and Peng, Bohao and Liu, Shu and Jia, Jiaya},
-  journal={arXiv preprint arXiv:2312.17240},
-  year={2023}
+  booktitle={CVPR},
+  year={2024}
 }
 ```
 
 ## Acknowledgement
--  This work is built upon the [LLaVA](https://github.com/haotian-liu/LLaVA) and [SAM](https://github.com/facebookresearch/segment-anything). 
+This work is built upon:
+- [LISA](https://github.com/JIA-Lab-research/LISA)
+- [LLaVA](https://github.com/haotian-liu/LLaVA)
+- [Segment Anything (SAM)](https://github.com/facebookresearch/segment-anything)
+
