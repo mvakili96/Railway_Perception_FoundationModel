@@ -1,6 +1,8 @@
 import glob
 import os
 import random
+import json
+from PIL import Image
 
 import cv2
 import numpy as np
@@ -286,6 +288,27 @@ class HybridDataset(torch.utils.data.Dataset):
         return *data[0], inference
 
 
+def init_railsem_sem_seg_val(base_image_dir, split):
+    railsem_data_root = os.path.join(base_image_dir, "RailSem19-SemSeg-LISA")
+    with open(os.path.join(railsem_data_root, "config_v2.0.json")) as f:
+        railsem_classes = json.load(f)["labels"]
+    railsem_classes = np.array([x["readable"].lower() for x in railsem_classes])
+    railsem_labels = sorted(
+        glob.glob(
+            os.path.join(railsem_data_root, split, "v2.0", "labels", "*.png")
+        )
+    )
+    if len(railsem_labels) == 0:
+        raise ValueError(
+            f"No RailSem semantic-segmentation labels found under {railsem_data_root}/{split}/v2.0/labels"
+        )
+    railsem_images = [
+        x.replace(".png", ".jpg").replace("v2.0/labels", "images")
+        for x in railsem_labels
+    ]
+    return railsem_classes, railsem_images, railsem_labels
+
+
 class ValDataset(torch.utils.data.Dataset):
     pixel_mean = torch.Tensor([123.675, 116.28, 103.53]).view(-1, 1, 1)
     pixel_std = torch.Tensor([58.395, 57.12, 57.375]).view(-1, 1, 1)
@@ -309,39 +332,16 @@ class ValDataset(torch.utils.data.Dataset):
             )
             self.images = images
             self.data_type = "reason_seg"
-        elif len(splits) == 3:
-            ds, splitBy, split = splits
-            refer_api = REFER(self.base_image_dir, ds, splitBy)
-            ref_ids_val = refer_api.getRefIds(split=split)
-            images_ids_val = refer_api.getImgIds(ref_ids=ref_ids_val)
-            refs_val = refer_api.loadRefs(ref_ids=ref_ids_val)
-            refer_seg_ds = {}
-            refer_seg_ds["images"] = []
-            loaded_images = refer_api.loadImgs(image_ids=images_ids_val)
-            for item in loaded_images:
-                item = item.copy()
-                if ds == "refclef":
-                    item["file_name"] = os.path.join(
-                        base_image_dir, "images/saiapr_tc-12", item["file_name"]
-                    )
-                elif ds in ["refcoco", "refcoco+", "refcocog", "grefcoco"]:
-                    item["file_name"] = os.path.join(
-                        base_image_dir,
-                        "images/mscoco/images/train2014",
-                        item["file_name"],
-                    )
-                refer_seg_ds["images"].append(item)
-            refer_seg_ds["annotations"] = refer_api.Anns  # anns_val
-
-            img2refs = {}
-            for ref in refs_val:
-                image_id = ref["image_id"]
-                img2refs[image_id] = img2refs.get(image_id, []) + [
-                    ref,
-                ]
-            refer_seg_ds["img2refs"] = img2refs
-            self.refer_seg_ds = refer_seg_ds
-            self.data_type = "refer_seg"
+        elif len(splits) == 3 and splits[0] == "sem_seg":
+            _, ds, split = splits
+            if ds != "railsem":
+                raise ValueError(
+                    f"Unsupported sem_seg validation dataset: {ds}. Use sem_seg|railsem|<split>."
+                )
+            self.sem_seg_classes, self.images, self.labels = init_railsem_sem_seg_val(
+                self.base_image_dir, split
+            )
+            self.data_type = "sem_seg"
 
         self.ds = ds
         self.image_size = image_size
@@ -393,6 +393,23 @@ class ValDataset(torch.utils.data.Dataset):
             sampled_ann_ids = ann_ids
             image = cv2.imread(image_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            is_sentence = False
+        elif self.data_type == "sem_seg":
+            image_path = self.images[idx]
+            label_path = self.labels[idx]
+            image = cv2.imread(image_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            label = np.array(Image.open(label_path))
+            if self.ds == "railsem":
+                if label.ndim == 3:
+                    label = label[:, :, 0]
+
+            sampled_class_ids = np.unique(label).tolist()
+            if self.ignore_label in sampled_class_ids:
+                sampled_class_ids.remove(self.ignore_label)
+            if len(sampled_class_ids) == 0:
+                return self.__getitem__((idx + 1) % len(self))
+            sampled_sents = [self.sem_seg_classes[class_id] for class_id in sampled_class_ids]
             is_sentence = False
         else:
             image_path = self.images[idx]
@@ -461,6 +478,9 @@ class ValDataset(torch.utils.data.Dataset):
                 )  # sometimes there are multiple binary map (corresponding to multiple segs)
                 m = m.astype(np.uint8)  # convert to np.uint8
                 masks.append(m)
+        elif self.data_type == "sem_seg":
+            label = torch.from_numpy(label).long()
+            masks = torch.stack([label == class_id for class_id in sampled_class_ids], dim=0)
         else:
             masks = [mask_json]
 
