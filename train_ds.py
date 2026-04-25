@@ -115,6 +115,18 @@ def parse_args(args):
     parser.add_argument("--start_epoch", default=0, type=int)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True)
     parser.add_argument("--train_mask_decoder", action="store_true", default=True)
+    parser.add_argument(
+        "--train_sam_neck",
+        action="store_true",
+        default=False,
+        help="Unfreeze the SAM image encoder neck.",
+    )
+    parser.add_argument(
+        "--train_sam_last_blocks",
+        default=0,
+        type=int,
+        help="Number of final SAM image encoder transformer blocks to unfreeze.",
+    )
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
     parser.add_argument("--auto_resume", action="store_true", default=True)
     parser.add_argument(
@@ -160,6 +172,8 @@ def main(args):
     vision_pretrained = None if args.hf_merged_model else args.vision_pretrained
     model_args = {
         "train_mask_decoder": args.train_mask_decoder,
+        "train_sam_neck": args.train_sam_neck,
+        "train_sam_last_blocks": args.train_sam_last_blocks,
         "out_dim": args.out_dim,
         "ce_loss_weight": args.ce_loss_weight,
         "dice_loss_weight": args.dice_loss_weight,
@@ -264,16 +278,49 @@ def main(args):
 
     model.resize_token_embeddings(len(tokenizer))
 
-    # make text_hidden_fcs, mask_decoder, lm_head, embed_tokens trainable
+    # Re-enable intentionally trainable modules after PEFT wraps the model.
+    sam_block_indices = []
+    sam_block_prefix = "visual_model.image_encoder.blocks."
+    for n, _ in model.named_parameters():
+        if sam_block_prefix in n:
+            block_idx = n.split(sam_block_prefix, 1)[1].split(".", 1)[0]
+            if block_idx.isdigit():
+                sam_block_indices.append(int(block_idx))
+    num_sam_blocks = max(sam_block_indices) + 1 if len(sam_block_indices) > 0 else 0
+    num_train_sam_blocks = max(
+        0, min(num_sam_blocks, args.train_sam_last_blocks)
+    )
+    sam_train_block_start = num_sam_blocks - num_train_sam_blocks
+
+    trainable_name_keys = [
+        "lm_head",
+        "embed_tokens",
+        "mask_decoder",
+        "text_hidden_fcs",
+        "heatmap_head",
+    ]
+
     for n, p in model.named_parameters():
-        if any(
-            [
-                x in n
-                for x in ["lm_head", "embed_tokens", "mask_decoder", "text_hidden_fcs"]
-            ]
-        ):
+        train_this_param = any(x in n for x in trainable_name_keys)
+        if args.train_sam_neck and "visual_model.image_encoder.neck" in n:
+            train_this_param = True
+        if num_train_sam_blocks > 0 and sam_block_prefix in n:
+            block_idx = n.split(sam_block_prefix, 1)[1].split(".", 1)[0]
+            if block_idx.isdigit() and int(block_idx) >= sam_train_block_start:
+                train_this_param = True
+
+        if train_this_param:
             print("n: ", n, "p.shape: ", p.shape)
             p.requires_grad = True
+
+    if args.is_main_process:
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        print(
+            "trainable params after manual unfreeze: {} || all params: {} || trainable%: {:.4f}".format(
+                trainable_params, total_params, 100 * trainable_params / total_params
+            )
+        )
 
     world_size = args.world_size
     args.distributed = world_size > 1

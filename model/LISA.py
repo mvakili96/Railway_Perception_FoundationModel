@@ -113,9 +113,17 @@ class LisaMetaModel:
         self.config = config
         if not hasattr(self.config, "train_mask_decoder"):
             self.config.train_mask_decoder = kwargs["train_mask_decoder"]
+            self.config.train_sam_neck = kwargs.get("train_sam_neck", False)
+            self.config.train_sam_last_blocks = kwargs.get("train_sam_last_blocks", 0)
             self.config.out_dim = kwargs["out_dim"]
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
         else:
+            self.config.train_sam_neck = kwargs.get(
+                "train_sam_neck", getattr(self.config, "train_sam_neck", False)
+            )
+            self.config.train_sam_last_blocks = kwargs.get(
+                "train_sam_last_blocks", getattr(self.config, "train_sam_last_blocks", 0)
+            )
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
             self.initialize_lisa_modules(self.config)
 
@@ -128,6 +136,19 @@ class LisaMetaModel:
             self.visual_model.mask_decoder.train()
             for param in self.visual_model.mask_decoder.parameters():
                 param.requires_grad = True
+
+        image_encoder = self.visual_model.image_encoder
+        if getattr(config, "train_sam_neck", False):
+            image_encoder.neck.train()
+            for param in image_encoder.neck.parameters():
+                param.requires_grad = True
+
+        num_train_blocks = max(0, min(len(image_encoder.blocks), getattr(config, "train_sam_last_blocks", 0)))
+        if num_train_blocks > 0:
+            for block in image_encoder.blocks[-num_train_blocks:]:
+                block.train()
+                for param in block.parameters():
+                    param.requires_grad = True
 
         # Projection layer
         in_dim = config.hidden_size
@@ -192,7 +213,14 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         self.post_init()
 
     def get_visual_embs(self, pixel_values: torch.FloatTensor):
-        with torch.no_grad():
+    # Only disable gradients when the SAM image encoder is actually frozen.
+        train_image_encoder = any(
+            p.requires_grad for p in self.model.visual_model.image_encoder.parameters()
+        )
+
+        grad_context = torch.enable_grad if train_image_encoder else torch.no_grad
+
+        with grad_context():
             image_embeddings_list = []
             for i in range(pixel_values.shape[0]):
                 torch.cuda.empty_cache()
