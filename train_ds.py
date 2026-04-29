@@ -98,6 +98,18 @@ def parse_args(args):
     parser.add_argument("--ce_loss_weight", default=1.0, type=float)
     parser.add_argument("--dice_loss_weight", default=0.5, type=float)
     parser.add_argument("--bce_loss_weight", default=2.0, type=float)
+    parser.add_argument(
+        "--boundary_bce_band_width",
+        default=0,
+        type=int,
+        help="Half-width in pixels of the GT-boundary band for BCE reweighting. 0 disables it.",
+    )
+    parser.add_argument(
+        "--boundary_bce_weight",
+        default=1.0,
+        type=float,
+        help="Extra BCE weight applied inside the GT-boundary band. 1.0 disables it.",
+    )
     parser.add_argument("--lora_alpha", default=16, type=int)
     parser.add_argument("--lora_dropout", default=0.05, type=float)
     parser.add_argument("--lora_target_modules", default="q_proj,v_proj", type=str)
@@ -178,6 +190,8 @@ def main(args):
         "ce_loss_weight": args.ce_loss_weight,
         "dice_loss_weight": args.dice_loss_weight,
         "bce_loss_weight": args.bce_loss_weight,
+        "boundary_bce_band_width": args.boundary_bce_band_width,
+        "boundary_bce_weight": args.boundary_bce_weight,
         "seg_token_idx": args.seg_token_idx,
         "vision_pretrained": vision_pretrained,
         "vision_tower": args.vision_tower,
@@ -196,6 +210,8 @@ def main(args):
         model.ce_loss_weight   = args.ce_loss_weight
         model.dice_loss_weight = args.dice_loss_weight
         model.bce_loss_weight  = args.bce_loss_weight
+        model.boundary_bce_band_width = args.boundary_bce_band_width
+        model.boundary_bce_weight = args.boundary_bce_weight
         model.out_dim          = args.out_dim
         model.seg_token_idx    = args.seg_token_idx
 

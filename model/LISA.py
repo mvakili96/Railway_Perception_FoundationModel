@@ -43,6 +43,8 @@ def sigmoid_ce_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
     num_masks: float,
+    boundary_band_width: int = 0,
+    boundary_weight: float = 1.0,
 ):
     """
     Args:
@@ -55,6 +57,30 @@ def sigmoid_ce_loss(
         Loss tensor
     """
     loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+
+    if boundary_band_width > 0 and boundary_weight > 1.0:
+        targets_4d = targets.unsqueeze(1).float()
+        kernel_size = 2 * boundary_band_width + 1
+        dilated_targets = F.max_pool2d(
+            targets_4d,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=boundary_band_width,
+        )
+        eroded_targets = -F.max_pool2d(
+            -targets_4d,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=boundary_band_width,
+        )
+        boundary_band = (dilated_targets - eroded_targets) > 0
+
+        pixel_weights = torch.ones_like(loss)
+        pixel_weights = pixel_weights.masked_fill(
+            boundary_band.squeeze(1), boundary_weight
+        )
+        loss = loss * pixel_weights
+
     loss = loss.flatten(1, 2).mean(1).sum() / (num_masks + 1e-8)
     return loss
 
@@ -190,6 +216,18 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         config,
         **kwargs,
     ):
+        
+        self.boundary_bce_band_width = kwargs.pop(
+            "boundary_bce_band_width",
+            getattr(config, "boundary_bce_band_width", 0),
+        )
+        self.boundary_bce_weight = kwargs.pop(
+            "boundary_bce_weight",
+            getattr(config, "boundary_bce_weight", 1.0),
+        )
+        config.boundary_bce_band_width = self.boundary_bce_band_width
+        config.boundary_bce_weight = self.boundary_bce_weight
+
         if not hasattr(config, "train_mask_decoder"):
             config.mm_use_im_start_end = kwargs.pop("use_mm_start_end", True)
             config.mm_vision_tower = kwargs.get(
@@ -390,7 +428,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 gt_mask.shape, pred_mask.shape
             )
             mask_bce_loss += (
-                sigmoid_ce_loss(pred_mask, gt_mask, num_masks=gt_mask.shape[0])
+                sigmoid_ce_loss(pred_mask, gt_mask, num_masks=gt_mask.shape[0], boundary_band_width=self.boundary_bce_band_width, boundary_weight=self.boundary_bce_weight,)
                 * gt_mask.shape[0]
             )
             mask_dice_loss += (
