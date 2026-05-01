@@ -40,21 +40,42 @@ def collate_fn(
     resize_list = []
     questions_list = []
     sampled_classes_list = []
+    reason_seg_weight_maps_list = []
     offset_list = [0]
     cnt = 0
     inferences = []
-    for (
-        image_path,
-        images,
-        images_clip,
-        conversations,
-        masks,
-        label,
-        resize,
-        questions,
-        sampled_classes,
-        inference,
-    ) in batch:
+    for sample in batch:
+        if len(sample) == 10:
+            (
+                image_path,
+                images,
+                images_clip,
+                conversations,
+                masks,
+                label,
+                resize,
+                questions,
+                sampled_classes,
+                inference,
+            ) = sample
+            reason_seg_weight_maps = torch.empty(0)
+        elif len(sample) == 11:
+            (
+                image_path,
+                images,
+                images_clip,
+                conversations,
+                masks,
+                label,
+                resize,
+                questions,
+                sampled_classes,
+                reason_seg_weight_maps,
+                inference,
+            ) = sample
+        else:
+            raise ValueError(f"Unexpected batch sample length: {len(sample)}")
+
         image_path_list.append(image_path)
         images_list.append(images)
         images_clip_list.append(images_clip)
@@ -64,6 +85,7 @@ def collate_fn(
         resize_list.append(resize)
         questions_list.append(questions)
         sampled_classes_list.append(sampled_classes)
+        reason_seg_weight_maps_list.append(reason_seg_weight_maps.float())
         cnt += len(conversations)
         offset_list.append(cnt)
         inferences.append(inference)
@@ -157,6 +179,7 @@ def collate_fn(
         "offset": torch.LongTensor(offset_list),
         "questions_list": questions_list,
         "sampled_classes_list": sampled_classes_list,
+        "reason_seg_weight_maps_list": reason_seg_weight_maps_list,
         "inference": inferences[0],
         "conversation_list": conversation_list,
     }
@@ -186,6 +209,8 @@ class HybridDataset(torch.utils.data.Dataset):
         reason_seg_data="ReasonSeg|train",
         reason_seg_rail_data="ReasonSegRail|train",
         explanatory=0.1,
+        reason_seg_weight_map_dir_name="weight_maps",
+        reason_seg_weight_map_weight=1.0,
     ):
         self.exclude_val = exclude_val
         self.dataset = dataset
@@ -259,6 +284,8 @@ class HybridDataset(torch.utils.data.Dataset):
                         exclude_val,
                         reason_seg_data,
                         explanatory,
+                        reason_seg_weight_map_dir_name,
+                        reason_seg_weight_map_weight,
                     )
                 )
 
@@ -275,6 +302,8 @@ class HybridDataset(torch.utils.data.Dataset):
                         exclude_val,
                         reason_seg_rail_data,
                         explanatory,
+                        reason_seg_weight_map_dir_name,
+                        reason_seg_weight_map_weight,
                     )
                 )
 

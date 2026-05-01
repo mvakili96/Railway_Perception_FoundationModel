@@ -110,6 +110,20 @@ def parse_args(args):
         type=float,
         help="Extra BCE weight applied inside the GT-boundary band. 1.0 disables it.",
     )
+
+    parser.add_argument(
+        "--reason_seg_weight_map_dir_name",
+        default="weight_maps",
+        type=str,
+        help="Sibling folder name under each ReasonSeg dataset root that stores .png pixel-weight maps.",
+    )
+    parser.add_argument(
+        "--reason_seg_weight_map_weight",
+        default=1.0,
+        type=float,
+        help="Extra pixel weight applied where the ReasonSeg weight-map value is nonzero. 1.0 disables it.",
+    )
+
     parser.add_argument("--lora_alpha", default=16, type=int)
     parser.add_argument("--lora_dropout", default=0.05, type=float)
     parser.add_argument("--lora_target_modules", default="q_proj,v_proj", type=str)
@@ -360,6 +374,8 @@ def main(args):
         reason_seg_data=args.reason_seg_data,
         reason_seg_rail_data=args.reason_seg_rail_data,
         explanatory=args.explanatory,
+        reason_seg_weight_map_dir_name=args.reason_seg_weight_map_dir_name,
+        reason_seg_weight_map_weight=args.reason_seg_weight_map_weight,
     )
 
     if args.no_eval == False:

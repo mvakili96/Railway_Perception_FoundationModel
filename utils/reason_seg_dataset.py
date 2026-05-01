@@ -6,6 +6,7 @@ import random
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 import torch.nn.functional as F
 from transformers import CLIPImageProcessor
 
@@ -36,12 +37,16 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         exclude_val=False,
         reason_seg_data="ReasonSeg|train",
         explanatory=0.1,
+        weight_map_dir_name="weight_maps",
+        weight_map_weight=1.0,
     ):
         self.exclude_val = exclude_val
         self.reason_seg_data = reason_seg_data
         self.samples_per_epoch = samples_per_epoch
         self.explanatory = explanatory
         self.num_classes_per_sample = num_classes_per_sample
+        self.weight_map_dir_name = weight_map_dir_name
+        self.weight_map_weight = weight_map_weight
 
         self.base_image_dir = base_image_dir
         self.image_size = image_size
@@ -94,6 +99,28 @@ class ReasonSegDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.samples_per_epoch
 
+    def load_reason_seg_weight_map(self, image_path):
+        if self.weight_map_weight <= 1.0:
+            return None
+
+        split_dir = os.path.dirname(image_path)
+        dataset_dir = os.path.dirname(split_dir)
+        image_stem = os.path.splitext(os.path.basename(image_path))[0]
+        weight_map_path = os.path.join(
+            dataset_dir, self.weight_map_dir_name, image_stem + "_weight.png"
+        )
+        if not os.path.exists(weight_map_path):
+            return None
+
+        weight_map = np.array(Image.open(weight_map_path))
+        if weight_map.ndim == 3:
+            weight_map = weight_map[:, :, 0]
+        weight_mask = weight_map > 0
+
+        pixel_weights = np.ones(weight_mask.shape, dtype=np.float32)
+        pixel_weights[weight_mask] = self.weight_map_weight
+        return torch.from_numpy(pixel_weights)
+
     def preprocess(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize pixel values and pad to a square input."""
         # Normalize colors
@@ -121,6 +148,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         ][0]
 
         mask, sents, is_sentence = get_mask_from_json(json_path, image)
+        reason_seg_weight_map = self.load_reason_seg_weight_map(image_path)
         if len(sents) >= self.num_classes_per_sample:
             sampled_inds = np.random.choice(
                 list(range(len(sents))), size=self.num_classes_per_sample, replace=False
@@ -200,10 +228,18 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         ):
             masks = torch.rand(0, *ori_size)
             label = torch.ones(ori_size) * self.ignore_label
+            reason_seg_weight_maps = torch.empty(0)
         else:
             masks = np.stack(sampled_masks, axis=0)
             masks = torch.from_numpy(masks)
             label = torch.ones(masks.shape[1], masks.shape[2]) * self.ignore_label
+            if reason_seg_weight_map is not None:
+                reason_seg_weight_maps = torch.stack(
+                    [reason_seg_weight_map.clone() for _ in range(len(sampled_sents))],
+                    dim=0,
+                )
+            else:
+                reason_seg_weight_maps = torch.empty(0)
 
         return (
             image_path,
@@ -215,4 +251,5 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             resize,
             questions,
             sampled_sents,
+            reason_seg_weight_maps,
         )

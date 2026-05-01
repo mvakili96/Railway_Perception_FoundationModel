@@ -45,6 +45,7 @@ def sigmoid_ce_loss(
     num_masks: float,
     boundary_band_width: int = 0,
     boundary_weight: float = 1.0,
+    pixel_weights: torch.Tensor = None,
 ):
     """
     Args:
@@ -57,6 +58,9 @@ def sigmoid_ce_loss(
         Loss tensor
     """
     loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+
+    if pixel_weights is not None and pixel_weights.numel() > 0:
+        loss = loss * pixel_weights.to(loss.dtype)
 
     if boundary_band_width > 0 and boundary_weight > 1.0:
         targets_4d = targets.unsqueeze(1).float()
@@ -286,6 +290,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         masks_list: List[torch.FloatTensor],
         label_list: List[torch.Tensor],
         resize_list: List[tuple],
+        reason_seg_weight_maps_list: List[torch.FloatTensor] = None,
         inference: bool = False,
         **kwargs,
     ):
@@ -427,8 +432,17 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             ), "gt_mask.shape: {}, pred_mask.shape: {}".format(
                 gt_mask.shape, pred_mask.shape
             )
+
+            pixel_weights = None
+            if (
+                reason_seg_weight_maps_list is not None
+                and batch_idx < len(reason_seg_weight_maps_list)
+                and reason_seg_weight_maps_list[batch_idx].numel() > 0
+            ):
+                pixel_weights = reason_seg_weight_maps_list[batch_idx]
+
             mask_bce_loss += (
-                sigmoid_ce_loss(pred_mask, gt_mask, num_masks=gt_mask.shape[0], boundary_band_width=self.boundary_bce_band_width, boundary_weight=self.boundary_bce_weight,)
+                sigmoid_ce_loss(pred_mask, gt_mask, num_masks=gt_mask.shape[0], boundary_band_width=self.boundary_bce_band_width, boundary_weight=self.boundary_bce_weight,pixel_weights=pixel_weights,)
                 * gt_mask.shape[0]
             )
             mask_dice_loss += (
