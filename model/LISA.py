@@ -144,12 +144,16 @@ class LisaMetaModel:
         if not hasattr(self.config, "train_mask_decoder"):
             self.config.train_mask_decoder = kwargs["train_mask_decoder"]
             self.config.train_sam_neck = kwargs.get("train_sam_neck", False)
+            self.config.train_sam_prompt_encoder = kwargs.get("train_sam_prompt_encoder", False)
             self.config.train_sam_last_blocks = kwargs.get("train_sam_last_blocks", 0)
             self.config.out_dim = kwargs["out_dim"]
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
         else:
             self.config.train_sam_neck = kwargs.get(
                 "train_sam_neck", getattr(self.config, "train_sam_neck", False)
+            )
+            self.config.train_sam_prompt_encoder = kwargs.get(
+                "train_sam_prompt_encoder", getattr(self.config, "train_sam_prompt_encoder", False)
             )
             self.config.train_sam_last_blocks = kwargs.get(
                 "train_sam_last_blocks", getattr(self.config, "train_sam_last_blocks", 0)
@@ -171,6 +175,11 @@ class LisaMetaModel:
         if getattr(config, "train_sam_neck", False):
             image_encoder.neck.train()
             for param in image_encoder.neck.parameters():
+                param.requires_grad = True
+
+        if getattr(config, "train_sam_prompt_encoder", False):
+            self.visual_model.prompt_encoder.train()
+            for param in self.visual_model.prompt_encoder.parameters():
                 param.requires_grad = True
 
         num_train_blocks = max(0, min(len(image_encoder.blocks), getattr(config, "train_sam_last_blocks", 0)))

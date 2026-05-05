@@ -147,6 +147,14 @@ def parse_args(args):
         default=False,
         help="Unfreeze the SAM image encoder neck.",
     )
+
+    parser.add_argument(
+        "--train_sam_prompt_encoder",
+        action="store_true",
+        default=False,
+        help="Unfreeze the SAM prompt encoder.",
+    )
+
     parser.add_argument(
         "--train_sam_last_blocks",
         default=0,
@@ -199,6 +207,7 @@ def main(args):
     model_args = {
         "train_mask_decoder": args.train_mask_decoder,
         "train_sam_neck": args.train_sam_neck,
+        "train_sam_prompt_encoder": args.train_sam_prompt_encoder,
         "train_sam_last_blocks": args.train_sam_last_blocks,
         "out_dim": args.out_dim,
         "ce_loss_weight": args.ce_loss_weight,
@@ -333,6 +342,8 @@ def main(args):
     for n, p in model.named_parameters():
         train_this_param = any(x in n for x in trainable_name_keys)
         if args.train_sam_neck and "visual_model.image_encoder.neck" in n:
+            train_this_param = True
+        if args.train_sam_prompt_encoder and "visual_model.prompt_encoder" in n:
             train_this_param = True
         if num_train_sam_blocks > 0 and sam_block_prefix in n:
             block_idx = n.split(sam_block_prefix, 1)[1].split(".", 1)[0]
