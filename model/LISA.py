@@ -144,6 +144,7 @@ class LisaMetaModel:
         if not hasattr(self.config, "train_mask_decoder"):
             self.config.train_mask_decoder = kwargs["train_mask_decoder"]
             self.config.train_sam_neck = kwargs.get("train_sam_neck", False)
+            self.config.train_sam_patch_embed = kwargs.get("train_sam_patch_embed", False)
             self.config.train_sam_prompt_encoder = kwargs.get("train_sam_prompt_encoder", False)
             self.config.train_sam_last_blocks = kwargs.get("train_sam_last_blocks", 0)
             self.config.out_dim = kwargs["out_dim"]
@@ -151,6 +152,9 @@ class LisaMetaModel:
         else:
             self.config.train_sam_neck = kwargs.get(
                 "train_sam_neck", getattr(self.config, "train_sam_neck", False)
+            )
+            self.config.train_sam_patch_embed = kwargs.get(
+                "train_sam_patch_embed", getattr(self.config, "train_sam_patch_embed", False)
             )
             self.config.train_sam_prompt_encoder = kwargs.get(
                 "train_sam_prompt_encoder", getattr(self.config, "train_sam_prompt_encoder", False)
@@ -175,6 +179,11 @@ class LisaMetaModel:
         if getattr(config, "train_sam_neck", False):
             image_encoder.neck.train()
             for param in image_encoder.neck.parameters():
+                param.requires_grad = True
+
+        if getattr(config, "train_sam_patch_embed", False):
+            image_encoder.patch_embed.train()
+            for param in image_encoder.patch_embed.parameters():
                 param.requires_grad = True
 
         if getattr(config, "train_sam_prompt_encoder", False):
