@@ -96,6 +96,12 @@ def parse_args(args):
     parser.add_argument("--workers", default=4, type=int)
     parser.add_argument("--lr", default=0.0003, type=float)
     parser.add_argument("--ce_loss_weight", default=1.0, type=float)
+    parser.add_argument(
+        "--use_rail_reasoning_weighted_ce",
+        action="store_true",
+        default=False,
+        help="Enable hardcoded per-slot CE weights for Rail ReasonSeg explanations.",
+    )
     parser.add_argument("--dice_loss_weight", default=0.5, type=float)
     parser.add_argument("--bce_loss_weight", default=2.0, type=float)
     parser.add_argument(
@@ -462,6 +468,7 @@ def main(args):
             conv_type=args.conv_type,
             use_mm_start_end=args.use_mm_start_end,
             local_rank=args.local_rank,
+            use_rail_reasoning_weighted_ce=args.use_rail_reasoning_weighted_ce,
         ),
         config=ds_config,
     )
@@ -504,6 +511,7 @@ def main(args):
                 conv_type=args.conv_type,
                 use_mm_start_end=args.use_mm_start_end,
                 local_rank=args.local_rank,
+                use_rail_reasoning_weighted_ce=args.use_rail_reasoning_weighted_ce,
             ),
         )
 

@@ -7,6 +7,7 @@ from transformers import BitsAndBytesConfig, CLIPVisionModel
 
 from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          DEFAULT_IMAGE_PATCH_TOKEN)
+from model.llava.constants import IGNORE_INDEX
 
 from .llava.model.language_model.llava_llama import (LlavaLlamaForCausalLM,
                                                      LlavaLlamaModel)
@@ -308,6 +309,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         masks_list: List[torch.FloatTensor],
         label_list: List[torch.Tensor],
         resize_list: List[tuple],
+        ce_token_weights: torch.FloatTensor = None,
         reason_seg_weight_maps_list: List[torch.FloatTensor] = None,
         inference: bool = False,
         **kwargs,
@@ -435,8 +437,58 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             }
 
         output = model_output.logits
+        
+        logits = model_output.logits
+        label_pad_len = logits.shape[1] - labels.shape[1]
+        if label_pad_len > 0:
+            pad_labels = torch.full(
+                (labels.shape[0], label_pad_len),
+                IGNORE_INDEX,
+                dtype=labels.dtype,
+                device=labels.device,
+            )
+            aligned_labels = torch.cat([pad_labels, labels], dim=1)
+            if ce_token_weights is None:
+                pad_weights = torch.ones(
+                    (labels.shape[0], label_pad_len),
+                    dtype=logits.dtype,
+                    device=logits.device,
+                )
+                aligned_token_weights = torch.cat(
+                    [pad_weights, torch.ones_like(labels, dtype=logits.dtype)], dim=1
+                )
+            else:
+                pad_weights = torch.ones(
+                    (ce_token_weights.shape[0], label_pad_len),
+                    dtype=ce_token_weights.dtype,
+                    device=ce_token_weights.device,
+                )
+                aligned_token_weights = torch.cat([pad_weights, ce_token_weights], dim=1)
+        else:
+            aligned_labels = labels
+            if ce_token_weights is None:
+                aligned_token_weights = torch.ones_like(labels, dtype=logits.dtype)
+            else:
+                aligned_token_weights = ce_token_weights
 
-        ce_loss = model_output.loss
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = aligned_labels[..., 1:].contiguous()
+        shift_token_weights = aligned_token_weights[..., 1:].to(shift_logits.dtype).contiguous()
+
+        token_ce = F.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            reduction="none",
+            ignore_index=IGNORE_INDEX,
+        )
+        flat_labels = shift_labels.view(-1)
+        flat_token_weights = shift_token_weights.view(-1)
+        valid_mask = flat_labels.ne(IGNORE_INDEX)
+        if valid_mask.any():
+            ce_loss = (token_ce[valid_mask] * flat_token_weights[valid_mask]).sum() / flat_token_weights[valid_mask].sum().clamp_min(1.0)
+        else:
+            ce_loss = token_ce.new_tensor(0.0)
+
         ce_loss = ce_loss * self.ce_loss_weight
         mask_bce_loss = 0
         mask_dice_loss = 0

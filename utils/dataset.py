@@ -27,9 +27,51 @@ from .utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                     DEFAULT_IMAGE_TOKEN)
 from .vqa_dataset import VQADataset
 
+RAIL_REASONING_DECISION_PATTERN = re.compile(
+    r"This is a (?P<switch>turnout|merge) switch\. "
+    r"The right blade is (?P<right_state>open|closed) and the left blade is (?P<left_state>open|closed)\. "
+    r"The open (?P<open_side>right|left) blade and the closed (?P<closed_side>right|left) blade together create a continuous rail "
+    r"connection toward the (?P<ego_path>right-hand|left-hand) path and break continuity with the (?P<other_path>right-hand|left-hand) path\. "
+    r"Therefore, the ego-path follows the (?P<final_path>right-hand|left-hand) path\."
+    r"(?: (?:It is \\[SEG\\]\.|Sure, \\[SEG\\]\.|Sure, it is \\[SEG\\]\.|Sure, the segmentation result is \\[SEG\\]\.|\\[SEG\\]\.))?$"
+)
+
+# Per-slot CE weights for Rail ReasonSeg explanations. Slots not listed here default to 1.0.
+RAIL_REASONING_DECISION_GROUP_WEIGHTS = {
+    "switch": 3.0,
+    "right_state": 2.5,
+    "left_state": 2.5,
+    "open_side": 2.5,
+    "closed_side": 2.5,
+    "ego_path": 3.0,
+    "other_path": 2.0,
+    "final_path": 3.5,
+}
+
+
+def build_rail_reasoning_ce_weights(assistant_text, tokenizer, target_len):
+    weights = torch.ones(target_len, dtype=torch.float32)
+
+    match = RAIL_REASONING_DECISION_PATTERN.search(assistant_text)
+    if match is None:
+        return weights
+
+    for group_name, group_weight in RAIL_REASONING_DECISION_GROUP_WEIGHTS.items():
+        if group_weight <= 1.0:
+            continue
+        char_start, char_end = match.span(group_name)
+        token_start = len(tokenizer(assistant_text[:char_start], add_special_tokens=False).input_ids)
+        token_end = len(tokenizer(assistant_text[:char_end], add_special_tokens=False).input_ids)
+        token_start = max(0, min(target_len, token_start))
+        token_end = max(token_start, min(target_len, token_end))
+        if token_end > token_start:
+            weights[token_start:token_end] = group_weight
+
+    return weights
+
 
 def collate_fn(
-    batch, tokenizer=None, conv_type="llava_v1", use_mm_start_end=True, local_rank=-1
+    batch, tokenizer=None, conv_type="llava_v1", use_mm_start_end=True, local_rank=-1, use_rail_reasoning_weighted_ce=False,
 ):
     image_path_list = []
     images_list = []
@@ -41,6 +83,7 @@ def collate_fn(
     questions_list = []
     sampled_classes_list = []
     reason_seg_weight_maps_list = []
+    conversation_is_rail_reasoning = []
     offset_list = [0]
     cnt = 0
     inferences = []
@@ -59,6 +102,7 @@ def collate_fn(
                 inference,
             ) = sample
             reason_seg_weight_maps = torch.empty(0)
+            is_rail_reasoning_sample = False
         elif len(sample) == 11:
             (
                 image_path,
@@ -73,6 +117,7 @@ def collate_fn(
                 reason_seg_weight_maps,
                 inference,
             ) = sample
+            is_rail_reasoning_sample = f"{os.sep}ReasonSegRail{os.sep}" in image_path
         else:
             raise ValueError(f"Unexpected batch sample length: {len(sample)}")
 
@@ -86,6 +131,9 @@ def collate_fn(
         questions_list.append(questions)
         sampled_classes_list.append(sampled_classes)
         reason_seg_weight_maps_list.append(reason_seg_weight_maps.float())
+        conversation_is_rail_reasoning.extend(
+            [is_rail_reasoning_sample for _ in range(len(conversations))]
+        )
         cnt += len(conversations)
         offset_list.append(cnt)
         inferences.append(inference)
@@ -111,12 +159,16 @@ def collate_fn(
 
     conv = conversation_lib.default_conversation.copy()
     targets = input_ids.clone()
+    ce_token_weights = torch.ones_like(targets, dtype=torch.float32)
 
     if conv_type == "llava_v1":
         sep = conv.sep + conv.roles[1] + ": "
     else:
         sep = "[/INST] "
-    for conversation, target in zip(conversation_list, targets):
+        
+    for conversation, target, token_weight, is_rail_reasoning in zip(
+        conversation_list, targets, ce_token_weights, conversation_is_rail_reasoning
+    ):       
         total_len = int(target.ne(tokenizer.pad_token_id).sum())
 
         rounds = conversation.split(conv.sep2)
@@ -140,6 +192,18 @@ def collate_fn(
                 instruction_len = len(tokenizer(parts[0]).input_ids) - 2
 
             target[cur_len : cur_len + instruction_len] = IGNORE_INDEX
+
+            assistant_start = cur_len + instruction_len
+            assistant_end = cur_len + round_len
+            if is_rail_reasoning and use_rail_reasoning_weighted_ce:
+                assistant_text = parts[1]
+                assistant_token_count = assistant_end - assistant_start
+                assistant_weights = build_rail_reasoning_ce_weights(
+                    assistant_text,
+                    tokenizer,
+                    assistant_token_count,
+                )
+                token_weight[assistant_start:assistant_end] = assistant_weights
 
             cur_len += round_len
         target[cur_len:] = IGNORE_INDEX
@@ -165,6 +229,7 @@ def collate_fn(
             input_ids = input_ids[:, :truncate_len]
             targets = targets[:, :truncate_len]
             attention_masks = attention_masks[:, :truncate_len]
+            ce_token_weights = ce_token_weights[:, :truncate_len]
 
     return {
         "image_paths": image_path_list,
@@ -173,6 +238,7 @@ def collate_fn(
         "input_ids": input_ids,
         "labels": targets,
         "attention_masks": attention_masks,
+        "ce_token_weights": ce_token_weights,
         "masks_list": masks_list,
         "label_list": label_list,
         "resize_list": resize_list,

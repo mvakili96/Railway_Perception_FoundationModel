@@ -188,7 +188,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                 elif choice == 1:  # [SEG] token + text answer
                     image_name = image_path.split("/")[-1]
                     answer = self.img_to_explanation[image_name]["outputs"]
-                    answer = random.choice(self.answer_list) + " {}".format(answer)
+                    answer = "{} {}".format(answer, random.choice(self.answer_list))
                     questions[-1] = (
                         DEFAULT_IMAGE_TOKEN
                         + "\n"
