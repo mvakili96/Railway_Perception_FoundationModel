@@ -48,6 +48,9 @@ RAIL_REASONING_DECISION_GROUP_WEIGHTS = {
     "final_path": 3.5,
 }
 
+# Shared CE weight for the [SEG] token across all mask-producing scenarios.
+# Set to 1.0 to disable extra weighting.
+SEG_TOKEN_CE_WEIGHT = 3.0
 
 def build_rail_reasoning_ce_weights(assistant_text, tokenizer, target_len):
     weights = torch.ones(target_len, dtype=torch.float32)
@@ -68,6 +71,16 @@ def build_rail_reasoning_ce_weights(assistant_text, tokenizer, target_len):
             weights[token_start:token_end] = group_weight
 
     return weights
+
+def apply_token_sequence_weight(token_weights, token_ids, token_sequence, weight):
+    if weight <= 1.0 or len(token_sequence) == 0:
+        return
+
+    sequence_len = len(token_sequence)
+    last_start = len(token_ids) - sequence_len + 1
+    for start_idx in range(max(0, last_start)):
+        if token_ids[start_idx : start_idx + sequence_len] == token_sequence:
+            token_weights[start_idx : start_idx + sequence_len] = weight
 
 
 def collate_fn(
@@ -160,14 +173,15 @@ def collate_fn(
     conv = conversation_lib.default_conversation.copy()
     targets = input_ids.clone()
     ce_token_weights = torch.ones_like(targets, dtype=torch.float32)
+    seg_token_ids = tokenizer("[SEG]", add_special_tokens=False).input_ids
 
     if conv_type == "llava_v1":
         sep = conv.sep + conv.roles[1] + ": "
     else:
         sep = "[/INST] "
         
-    for conversation, target, token_weight, is_rail_reasoning in zip(
-        conversation_list, targets, ce_token_weights, conversation_is_rail_reasoning
+    for conversation, input_id, target, token_weight, is_rail_reasoning in zip(
+        conversation_list, input_ids, targets, ce_token_weights, conversation_is_rail_reasoning
     ):       
         total_len = int(target.ne(tokenizer.pad_token_id).sum())
 
@@ -204,6 +218,14 @@ def collate_fn(
                     assistant_token_count,
                 )
                 token_weight[assistant_start:assistant_end] = assistant_weights
+
+            assistant_token_ids = input_id[assistant_start:assistant_end].tolist()
+            apply_token_sequence_weight(
+                token_weight[assistant_start:assistant_end],
+                assistant_token_ids,
+                seg_token_ids,
+                SEG_TOKEN_CE_WEIGHT,
+            )
 
             cur_len += round_len
         target[cur_len:] = IGNORE_INDEX
