@@ -84,7 +84,7 @@ def apply_token_sequence_weight(token_weights, token_ids, token_sequence, weight
 
 
 def collate_fn(
-    batch, tokenizer=None, conv_type="llava_v1", use_mm_start_end=True, local_rank=-1, use_rail_reasoning_weighted_ce=False,
+    batch, tokenizer=None, conv_type="llava_v1", use_mm_start_end=True, local_rank=-1, use_rail_reasoning_weighted_ce=False, use_seg_token_weighted_ce=False,
 ):
     image_path_list = []
     images_list = []
@@ -218,14 +218,15 @@ def collate_fn(
                     assistant_token_count,
                 )
                 token_weight[assistant_start:assistant_end] = assistant_weights
-
-            assistant_token_ids = input_id[assistant_start:assistant_end].tolist()
-            apply_token_sequence_weight(
-                token_weight[assistant_start:assistant_end],
-                assistant_token_ids,
-                seg_token_ids,
-                SEG_TOKEN_CE_WEIGHT,
-            )
+            
+            if use_seg_token_weighted_ce:
+                assistant_token_ids = input_id[assistant_start:assistant_end].tolist()
+                apply_token_sequence_weight(
+                    token_weight[assistant_start:assistant_end],
+                    assistant_token_ids,
+                    seg_token_ids,
+                    SEG_TOKEN_CE_WEIGHT,
+                )
 
             cur_len += round_len
         target[cur_len:] = IGNORE_INDEX

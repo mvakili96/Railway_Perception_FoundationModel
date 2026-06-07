@@ -102,6 +102,12 @@ def parse_args(args):
         default=False,
         help="Enable hardcoded per-slot CE weights for Rail ReasonSeg explanations.",
     )
+    parser.add_argument(
+        "--use_seg_token_weighted_ce",
+        action="store_true",
+        default=False,
+        help="Enable hardcoded extra CE weight for the [SEG] token.",
+    )
     parser.add_argument("--dice_loss_weight", default=0.5, type=float)
     parser.add_argument("--bce_loss_weight", default=2.0, type=float)
     parser.add_argument(
@@ -469,6 +475,7 @@ def main(args):
             use_mm_start_end=args.use_mm_start_end,
             local_rank=args.local_rank,
             use_rail_reasoning_weighted_ce=args.use_rail_reasoning_weighted_ce,
+            use_seg_token_weighted_ce=args.use_seg_token_weighted_ce,
         ),
         config=ds_config,
     )
@@ -512,6 +519,7 @@ def main(args):
                 use_mm_start_end=args.use_mm_start_end,
                 local_rank=args.local_rank,
                 use_rail_reasoning_weighted_ce=args.use_rail_reasoning_weighted_ce,
+                use_seg_token_weighted_ce=args.use_seg_token_weighted_ce,
             ),
         )
 
