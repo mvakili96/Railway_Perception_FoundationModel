@@ -251,6 +251,11 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         )
         config.boundary_bce_band_width = self.boundary_bce_band_width
         config.boundary_bce_weight = self.boundary_bce_weight
+        self.use_rail_reasoning_prompt_tokens = kwargs.pop(
+            "use_rail_reasoning_prompt_tokens",
+            getattr(config, "use_rail_reasoning_prompt_tokens", False),
+        )
+        config.use_rail_reasoning_prompt_tokens = self.use_rail_reasoning_prompt_tokens
 
         if not hasattr(config, "train_mask_decoder"):
             config.mm_use_im_start_end = kwargs.pop("use_mm_start_end", True)
@@ -334,7 +339,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             dim=1,
         )
         prompt_token_mask = seg_token_mask
-        if reasoning_decision_token_masks is not None:
+        if self.use_rail_reasoning_prompt_tokens and reasoning_decision_token_masks is not None:
             decision_token_mask = reasoning_decision_token_masks[:, 1:]
             decision_token_mask = torch.cat(
                 [
@@ -616,7 +621,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 dim=1,
             )
             prompt_token_mask = seg_token_mask
-            if tokenizer is not None:
+            if self.use_rail_reasoning_prompt_tokens and tokenizer is not None:
                 decision_token_mask = self._build_generated_reasoning_decision_mask(
                     output_ids,
                     tokenizer,

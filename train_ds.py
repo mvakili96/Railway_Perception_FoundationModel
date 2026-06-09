@@ -108,6 +108,12 @@ def parse_args(args):
         default=False,
         help="Enable hardcoded extra CE weight for the [SEG] token.",
     )
+    parser.add_argument(
+        "--use_rail_reasoning_prompt_tokens",
+        action="store_true",
+        default=False,
+        help="Append Rail reasoning open-side token hidden states to the [SEG] SAM prompt.",
+    )
     parser.add_argument("--dice_loss_weight", default=0.5, type=float)
     parser.add_argument("--bce_loss_weight", default=2.0, type=float)
     parser.add_argument(
@@ -235,6 +241,7 @@ def main(args):
         "bce_loss_weight": args.bce_loss_weight,
         "boundary_bce_band_width": args.boundary_bce_band_width,
         "boundary_bce_weight": args.boundary_bce_weight,
+        "use_rail_reasoning_prompt_tokens": args.use_rail_reasoning_prompt_tokens,
         "seg_token_idx": args.seg_token_idx,
         "vision_pretrained": vision_pretrained,
         "vision_tower": args.vision_tower,
@@ -255,6 +262,8 @@ def main(args):
         model.bce_loss_weight  = args.bce_loss_weight
         model.boundary_bce_band_width = args.boundary_bce_band_width
         model.boundary_bce_weight = args.boundary_bce_weight
+        model.use_rail_reasoning_prompt_tokens = args.use_rail_reasoning_prompt_tokens
+        model.config.use_rail_reasoning_prompt_tokens = args.use_rail_reasoning_prompt_tokens
         model.out_dim          = args.out_dim
         model.seg_token_idx    = args.seg_token_idx
 
