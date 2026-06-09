@@ -112,6 +112,11 @@ def collate_fn(
                 inference,
             ) = sample
             is_rail_reasoning_sample = f"{os.sep}ReasonSegRail{os.sep}" in image_path
+            # print(
+            #     "[rail path debug]",
+            #     "image_path=", image_path,
+            #     "is_rail_reasoning_sample=", is_rail_reasoning_sample,
+            # )
         else:
             raise ValueError(f"Unexpected batch sample length: {len(sample)}")
 
@@ -218,6 +223,13 @@ def collate_fn(
                     tokenizer,
                     assistant_token_count,
                 )
+                # if "[SEG]" in assistant_text:
+                #     print(
+                #         "[reason prompt debug]",
+                #         "matched_decision_tokens=", int(decision_token_mask.sum()),
+                #         "assistant_token_count=", assistant_token_count,
+                #         "assistant_text=", repr(assistant_text),
+                #     )
                 reasoning_decision_token_masks[
                     conversation_idx, assistant_start:assistant_end
                 ] |= decision_token_mask

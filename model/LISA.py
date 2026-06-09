@@ -439,6 +439,14 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         multimask_output = False
         pred_masks = []
         for i in range(len(pred_embeddings)):
+            # print(
+            #     "[SAM prompt debug]",
+            #     "mode=", "validation" if inference else "training",
+            #     "image_idx=", i,
+            #     "text_embeds_shape=", tuple(pred_embeddings[i].shape),
+            #     "use_rail_reasoning_prompt_tokens=",
+            #     self.use_rail_reasoning_prompt_tokens,
+            # )
             (
                 sparse_embeddings,
                 dense_embeddings,
