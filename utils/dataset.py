@@ -20,37 +20,18 @@ from model.segment_anything.utils.transforms import ResizeLongestSide
 from .conversation import get_default_conv_template
 from .data_processing import get_mask_from_json
 from .reason_seg_dataset import ReasonSegDataset
+from .rail_reasoning import (
+    RAIL_REASONING_DECISION_GROUP_WEIGHTS,
+    RAIL_REASONING_DECISION_PATTERN,
+    SEG_TOKEN_CE_WEIGHT,
+    build_rail_reasoning_decision_token_mask,
+)
 from .refer import REFER
 from .refer_seg_dataset import ReferSegDataset
 from .sem_seg_dataset import SemSegDataset
 from .utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                     DEFAULT_IMAGE_TOKEN)
 from .vqa_dataset import VQADataset
-
-RAIL_REASONING_DECISION_PATTERN = re.compile(
-    r"This is a (?P<switch>turnout|merge) switch\. "
-    r"The right blade is (?P<right_state>open|closed) and the left blade is (?P<left_state>open|closed)\. "
-    r"The open (?P<open_side>right|left) blade and the closed (?P<closed_side>right|left) blade together create a continuous rail "
-    r"connection toward the (?P<ego_path>right-hand|left-hand) path and break continuity with the (?P<other_path>right-hand|left-hand) path\. "
-    r"Therefore, the ego-path follows the (?P<final_path>right-hand|left-hand) path\."
-    r"(?: (?:It is \\[SEG\\]\.|Sure, \\[SEG\\]\.|Sure, it is \\[SEG\\]\.|Sure, the segmentation result is \\[SEG\\]\.|\\[SEG\\]\.))?$"
-)
-
-# Per-slot CE weights for Rail ReasonSeg explanations. Slots not listed here default to 1.0.
-RAIL_REASONING_DECISION_GROUP_WEIGHTS = {
-    "switch": 3.0,
-    "right_state": 2.5,
-    "left_state": 2.5,
-    "open_side": 2.5,
-    "closed_side": 2.5,
-    "ego_path": 3.0,
-    "other_path": 2.0,
-    "final_path": 3.5,
-}
-
-# Shared CE weight for the [SEG] token across all mask-producing scenarios.
-# Set to 1.0 to disable extra weighting.
-SEG_TOKEN_CE_WEIGHT = 3.0
 
 def build_rail_reasoning_ce_weights(assistant_text, tokenizer, target_len):
     weights = torch.ones(target_len, dtype=torch.float32)
@@ -173,6 +154,7 @@ def collate_fn(
     conv = conversation_lib.default_conversation.copy()
     targets = input_ids.clone()
     ce_token_weights = torch.ones_like(targets, dtype=torch.float32)
+    reasoning_decision_token_masks = torch.zeros_like(targets, dtype=torch.bool)
     seg_token_ids = tokenizer("[SEG]", add_special_tokens=False).input_ids
 
     if conv_type == "llava_v1":
@@ -180,8 +162,17 @@ def collate_fn(
     else:
         sep = "[/INST] "
         
-    for conversation, input_id, target, token_weight, is_rail_reasoning in zip(
-        conversation_list, input_ids, targets, ce_token_weights, conversation_is_rail_reasoning
+    for (
+        conversation_idx,
+        (conversation, input_id, target, token_weight, is_rail_reasoning),
+    ) in enumerate(
+        zip(
+            conversation_list,
+            input_ids,
+            targets,
+            ce_token_weights,
+            conversation_is_rail_reasoning,
+        )
     ):       
         total_len = int(target.ne(tokenizer.pad_token_id).sum())
 
@@ -218,6 +209,18 @@ def collate_fn(
                     assistant_token_count,
                 )
                 token_weight[assistant_start:assistant_end] = assistant_weights
+
+            if is_rail_reasoning:
+                assistant_text = parts[1]
+                assistant_token_count = assistant_end - assistant_start
+                decision_token_mask = build_rail_reasoning_decision_token_mask(
+                    assistant_text,
+                    tokenizer,
+                    assistant_token_count,
+                )
+                reasoning_decision_token_masks[
+                    conversation_idx, assistant_start:assistant_end
+                ] |= decision_token_mask
             
             if use_seg_token_weighted_ce:
                 assistant_token_ids = input_id[assistant_start:assistant_end].tolist()
@@ -253,6 +256,9 @@ def collate_fn(
             targets = targets[:, :truncate_len]
             attention_masks = attention_masks[:, :truncate_len]
             ce_token_weights = ce_token_weights[:, :truncate_len]
+            reasoning_decision_token_masks = reasoning_decision_token_masks[
+                :, :truncate_len
+            ]
 
     return {
         "image_paths": image_path_list,
@@ -262,6 +268,7 @@ def collate_fn(
         "labels": targets,
         "attention_masks": attention_masks,
         "ce_token_weights": ce_token_weights,
+        "reasoning_decision_token_masks": reasoning_decision_token_masks,
         "masks_list": masks_list,
         "label_list": label_list,
         "resize_list": resize_list,

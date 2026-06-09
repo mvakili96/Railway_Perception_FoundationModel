@@ -7,7 +7,8 @@ from transformers import BitsAndBytesConfig, CLIPVisionModel
 
 from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          DEFAULT_IMAGE_PATCH_TOKEN)
-from model.llava.constants import IGNORE_INDEX
+from utils.rail_reasoning import build_rail_reasoning_decision_token_mask
+from model.llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX
 
 from .llava.model.language_model.llava_llama import (LlavaLlamaForCausalLM,
                                                      LlavaLlamaModel)
@@ -310,6 +311,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         label_list: List[torch.Tensor],
         resize_list: List[tuple],
         ce_token_weights: torch.FloatTensor = None,
+        reasoning_decision_token_masks: torch.BoolTensor = None,
         reason_seg_weight_maps_list: List[torch.FloatTensor] = None,
         inference: bool = False,
         **kwargs,
@@ -331,6 +333,35 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             [torch.zeros((seg_token_mask.shape[0], 255)).bool().cuda(), seg_token_mask],
             dim=1,
         )
+        prompt_token_mask = seg_token_mask
+        if reasoning_decision_token_masks is not None:
+            decision_token_mask = reasoning_decision_token_masks[:, 1:]
+            decision_token_mask = torch.cat(
+                [
+                    decision_token_mask,
+                    torch.zeros(
+                        (decision_token_mask.shape[0], 1),
+                        dtype=torch.bool,
+                        device=decision_token_mask.device,
+                    ),
+                ],
+                dim=1,
+            )
+            decision_token_mask = torch.cat(
+                [
+                    torch.zeros(
+                        (decision_token_mask.shape[0], 255),
+                        dtype=torch.bool,
+                        device=decision_token_mask.device,
+                    ),
+                    decision_token_mask,
+                ],
+                dim=1,
+            )
+            decision_token_mask = decision_token_mask.to(seg_token_mask.device)
+            prompt_token_mask = seg_token_mask | (
+                decision_token_mask & seg_token_mask.any(dim=1, keepdim=True)
+            )
 
         if inference:
             n_batch = 1
@@ -384,19 +415,19 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states[-1]))
 
         last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
-        pred_embeddings = last_hidden_state[seg_token_mask]
-        seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
+        pred_embeddings = last_hidden_state[prompt_token_mask]
+        prompt_token_counts = prompt_token_mask.int().sum(-1)  # [bs, ]
 
-        seg_token_offset = seg_token_counts.cumsum(-1)
-        seg_token_offset = torch.cat(
-            [torch.zeros(1).long().cuda(), seg_token_offset], dim=0
+        prompt_token_offset = prompt_token_counts.cumsum(-1)
+        prompt_token_offset = torch.cat(
+            [torch.zeros(1).long().cuda(), prompt_token_offset], dim=0
         )
 
-        seg_token_offset = seg_token_offset[offset]
+        prompt_token_offset = prompt_token_offset[offset]
 
         pred_embeddings_ = []
-        for i in range(len(seg_token_offset) - 1):
-            start_i, end_i = seg_token_offset[i], seg_token_offset[i + 1]
+        for i in range(len(prompt_token_offset) - 1):
+            start_i, end_i = prompt_token_offset[i], prompt_token_offset[i + 1]
             pred_embeddings_.append(pred_embeddings[start_i:end_i])
         pred_embeddings = pred_embeddings_
 
@@ -535,6 +566,24 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             "mask_loss": mask_loss,
         }
 
+    def _build_generated_reasoning_decision_mask(self, output_ids, tokenizer):
+        decision_token_mask = torch.zeros_like(output_ids, dtype=torch.bool)
+
+        for row_idx in range(output_ids.shape[0]):
+            keep_mask = output_ids[row_idx].ne(IMAGE_TOKEN_INDEX)
+            clean_ids = output_ids[row_idx][keep_mask]
+            text = tokenizer.decode(clean_ids, skip_special_tokens=False)
+            clean_decision_mask = build_rail_reasoning_decision_token_mask(
+                text,
+                tokenizer,
+                clean_ids.shape[0],
+            ).to(output_ids.device)
+            if clean_decision_mask.any():
+                source_positions = torch.nonzero(keep_mask, as_tuple=False).flatten()
+                decision_token_mask[row_idx, source_positions] = clean_decision_mask
+
+        return decision_token_mask
+
     def evaluate(
         self,
         images_clip,
@@ -566,6 +615,27 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 ],
                 dim=1,
             )
+            prompt_token_mask = seg_token_mask
+            if tokenizer is not None:
+                decision_token_mask = self._build_generated_reasoning_decision_mask(
+                    output_ids,
+                    tokenizer,
+                )
+                decision_token_mask = torch.cat(
+                    [
+                        torch.zeros(
+                            (decision_token_mask.shape[0], 255),
+                            dtype=torch.bool,
+                            device=decision_token_mask.device,
+                        ),
+                        decision_token_mask[:, 1:],
+                    ],
+                    dim=1,
+                )
+                decision_token_mask = decision_token_mask.to(seg_token_mask.device)
+                prompt_token_mask = seg_token_mask | (
+                    decision_token_mask & seg_token_mask.any(dim=1, keepdim=True)
+                )
 
             hidden_states = []
 
@@ -573,17 +643,17 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states))
 
             last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
-            pred_embeddings = last_hidden_state[seg_token_mask]
+            pred_embeddings = last_hidden_state[prompt_token_mask]
 
-            seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
-            seg_token_offset = seg_token_counts.cumsum(-1)
-            seg_token_offset = torch.cat(
-                [torch.zeros(1).long().cuda(), seg_token_offset], dim=0
+            prompt_token_counts = prompt_token_mask.int().sum(-1)  # [bs, ]
+            prompt_token_offset = prompt_token_counts.cumsum(-1)
+            prompt_token_offset = torch.cat(
+                [torch.zeros(1).long().cuda(), prompt_token_offset], dim=0
             )
 
             pred_embeddings_ = []
-            for i in range(len(seg_token_offset) - 1):
-                start_i, end_i = seg_token_offset[i], seg_token_offset[i + 1]
+            for i in range(len(prompt_token_offset) - 1):
+                start_i, end_i = prompt_token_offset[i], prompt_token_offset[i + 1]
                 pred_embeddings_.append(pred_embeddings[start_i:end_i])
             pred_embeddings = pred_embeddings_
 
