@@ -180,6 +180,12 @@ def parse_args(args):
         type=int,
         help="Number of final SAM image encoder transformer blocks to unfreeze.",
     )
+    parser.add_argument(
+        "--train_mm_projector",
+        action="store_true",
+        default=False,
+        help="Unfreeze LLaVA's CLIP-to-LLM mm_projector.",
+    )
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
     parser.add_argument("--auto_resume", action="store_true", default=True)
     parser.add_argument(
@@ -366,6 +372,8 @@ def main(args):
         if args.train_sam_patch_embed and "visual_model.image_encoder.patch_embed" in n:
             train_this_param = True
         if args.train_sam_prompt_encoder and "visual_model.prompt_encoder" in n:
+            train_this_param = True
+        if args.train_mm_projector and "mm_projector" in n:
             train_this_param = True
         if num_train_sam_blocks > 0 and sam_block_prefix in n:
             block_idx = n.split(sam_block_prefix, 1)[1].split(".", 1)[0]
