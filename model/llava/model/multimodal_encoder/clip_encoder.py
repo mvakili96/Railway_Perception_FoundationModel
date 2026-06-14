@@ -38,23 +38,32 @@ class CLIPVisionTower(nn.Module):
             raise ValueError(f"Unexpected select feature: {self.select_feature}")
         return image_features
 
-    @torch.no_grad()
     def forward(self, images):
-        if type(images) is list:
-            image_features = []
-            for image in images:
-                image_forward_out = self.vision_tower(
-                    image.to(device=self.device, dtype=self.dtype).unsqueeze(0),
+        train_vision_tower = any(
+            p.requires_grad for p in self.vision_tower.parameters()
+        )
+        grad_context = torch.enable_grad if train_vision_tower else torch.no_grad
+
+        with grad_context():
+            if type(images) is list:
+                image_features = []
+                for image in images:
+                    image_forward_out = self.vision_tower(
+                        image.to(device=self.device, dtype=self.dtype).unsqueeze(0),
+                        output_hidden_states=True,
+                    )
+                    image_feature = self.feature_select(image_forward_out).to(
+                        image.dtype
+                    )
+                    image_features.append(image_feature)
+            else:
+                image_forward_outs = self.vision_tower(
+                    images.to(device=self.device, dtype=self.dtype),
                     output_hidden_states=True,
                 )
-                image_feature = self.feature_select(image_forward_out).to(image.dtype)
-                image_features.append(image_feature)
-        else:
-            image_forward_outs = self.vision_tower(
-                images.to(device=self.device, dtype=self.dtype),
-                output_hidden_states=True,
-            )
-            image_features = self.feature_select(image_forward_outs).to(images.dtype)
+                image_features = self.feature_select(image_forward_outs).to(
+                    images.dtype
+                )
 
         torch.cuda.empty_cache()
         return image_features

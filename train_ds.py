@@ -186,6 +186,18 @@ def parse_args(args):
         default=False,
         help="Unfreeze LLaVA's CLIP-to-LLM mm_projector.",
     )
+    parser.add_argument(
+        "--train_clip_last_blocks",
+        default=0,
+        type=int,
+        help="Number of final CLIP vision blocks feeding the selected LLaVA feature to unfreeze.",
+    )
+    parser.add_argument(
+        "--clip_lr",
+        default=1e-5,
+        type=float,
+        help="Learning rate for trainable CLIP vision parameters.",
+    )
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
     parser.add_argument("--auto_resume", action="store_true", default=True)
     parser.add_argument(
@@ -356,6 +368,36 @@ def main(args):
         0, min(num_sam_blocks, args.train_sam_last_blocks)
     )
     sam_train_block_start = num_sam_blocks - num_train_sam_blocks
+    clip_block_indices = []
+    clip_block_prefix = "vision_tower.vision_tower.vision_model.encoder.layers."
+    for n, _ in model.named_parameters():
+        if clip_block_prefix in n:
+            block_idx = n.split(clip_block_prefix, 1)[1].split(".", 1)[0]
+            if block_idx.isdigit():
+                clip_block_indices.append(int(block_idx))
+    num_clip_blocks = max(clip_block_indices) + 1 if len(clip_block_indices) > 0 else 0
+    num_train_clip_blocks = max(
+        0, min(num_clip_blocks, args.train_clip_last_blocks)
+    )
+    clip_train_block_start = num_clip_blocks
+    clip_train_block_end = -1
+    if num_train_clip_blocks > 0:
+        selected_layer = getattr(vision_tower, "select_layer", -1)
+        selected_hidden_idx = (
+            num_clip_blocks + 1 + selected_layer
+            if selected_layer < 0
+            else selected_layer
+        )
+        clip_train_block_end = max(0, min(num_clip_blocks - 1, selected_hidden_idx - 1))
+        clip_train_block_start = max(
+            0, clip_train_block_end - num_train_clip_blocks + 1
+        )
+        if args.is_main_process:
+            print(
+                "training CLIP vision blocks {}-{} with clip_lr={}".format(
+                    clip_train_block_start, clip_train_block_end, args.clip_lr
+                )
+            )
 
     trainable_name_keys = [
         "lm_head",
@@ -375,6 +417,13 @@ def main(args):
             train_this_param = True
         if args.train_mm_projector and "mm_projector" in n:
             train_this_param = True
+        if num_train_clip_blocks > 0 and clip_block_prefix in n:
+            block_idx = n.split(clip_block_prefix, 1)[1].split(".", 1)[0]
+            if (
+                block_idx.isdigit()
+                and clip_train_block_start <= int(block_idx) <= clip_train_block_end
+            ):
+                train_this_param = True
         if num_train_sam_blocks > 0 and sam_block_prefix in n:
             block_idx = n.split(sam_block_prefix, 1)[1].split(".", 1)[0]
             if block_idx.isdigit() and int(block_idx) >= sam_train_block_start:
@@ -390,6 +439,33 @@ def main(args):
         print(
             "trainable params after manual unfreeze: {} || all params: {} || trainable%: {:.4f}".format(
                 trainable_params, total_params, 100 * trainable_params / total_params
+            )
+        )
+
+    clip_trainable_params = []
+    base_trainable_params = []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if num_train_clip_blocks > 0 and clip_block_prefix in n:
+            clip_trainable_params.append(p)
+        else:
+            base_trainable_params.append(p)
+
+    optimizer_param_groups = [{"params": base_trainable_params, "lr": args.lr}]
+    warmup_min_lr = 0
+    warmup_max_lr = args.lr
+    if len(clip_trainable_params) > 0:
+        optimizer_param_groups.append(
+            {"params": clip_trainable_params, "lr": args.clip_lr}
+        )
+        warmup_min_lr = [0, 0]
+        warmup_max_lr = [args.lr, args.clip_lr]
+    if args.is_main_process:
+        print(
+            "optimizer param groups: base_params={} clip_params={}".format(
+                sum(p.numel() for p in base_trainable_params),
+                sum(p.numel() for p in clip_trainable_params),
             )
         )
 
@@ -450,8 +526,8 @@ def main(args):
             "type": "WarmupDecayLR",
             "params": {
                 "total_num_steps": args.epochs * args.steps_per_epoch,
-                "warmup_min_lr": 0,
-                "warmup_max_lr": args.lr,
+                "warmup_min_lr": warmup_min_lr,
+                "warmup_max_lr": warmup_max_lr,
                 "warmup_num_steps": 100,
                 "warmup_type": "linear",
             },
@@ -474,7 +550,7 @@ def main(args):
     }
     model_engine, optimizer, train_loader, scheduler = deepspeed.initialize(
         model=model,
-        model_parameters=model.parameters(),
+        model_parameters=optimizer_param_groups,
         training_data=train_dataset,
         collate_fn=partial(
             collate_fn,
