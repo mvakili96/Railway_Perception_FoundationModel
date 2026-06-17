@@ -108,6 +108,12 @@ def parse_args(args):
         default=False,
         help="Enable hardcoded extra CE weight for the [SEG] token.",
     )
+    parser.add_argument(
+        "--rail_ego_side_loss_weight",
+        default=0.0,
+        type=float,
+        help="Auxiliary CE loss weight for predicting left/right ego-side from the [SEG] hidden state.",
+    )
     parser.add_argument("--dice_loss_weight", default=0.5, type=float)
     parser.add_argument("--bce_loss_weight", default=2.0, type=float)
     parser.add_argument(
@@ -251,6 +257,7 @@ def main(args):
         "ce_loss_weight": args.ce_loss_weight,
         "dice_loss_weight": args.dice_loss_weight,
         "bce_loss_weight": args.bce_loss_weight,
+        "rail_ego_side_loss_weight": args.rail_ego_side_loss_weight,
         "boundary_bce_band_width": args.boundary_bce_band_width,
         "boundary_bce_weight": args.boundary_bce_weight,
         "seg_token_idx": args.seg_token_idx,
@@ -271,6 +278,8 @@ def main(args):
         model.ce_loss_weight   = args.ce_loss_weight
         model.dice_loss_weight = args.dice_loss_weight
         model.bce_loss_weight  = args.bce_loss_weight
+        model.rail_ego_side_loss_weight = args.rail_ego_side_loss_weight
+        model.config.rail_ego_side_loss_weight = args.rail_ego_side_loss_weight
         model.boundary_bce_band_width = args.boundary_bce_band_width
         model.boundary_bce_weight = args.boundary_bce_weight
         model.out_dim          = args.out_dim
@@ -416,6 +425,8 @@ def main(args):
         if args.train_sam_prompt_encoder and "visual_model.prompt_encoder" in n:
             train_this_param = True
         if args.train_mm_projector and "mm_projector" in n:
+            train_this_param = True
+        if args.rail_ego_side_loss_weight > 0 and "rail_ego_side_head" in n:
             train_this_param = True
         if num_train_clip_blocks > 0 and clip_block_prefix in n:
             block_idx = n.split(clip_block_prefix, 1)[1].split(".", 1)[0]
@@ -664,6 +675,7 @@ def train(
     data_time = AverageMeter("Data", ":6.3f")
     losses = AverageMeter("Loss", ":.4f")
     ce_losses = AverageMeter("CeLoss", ":.4f")
+    rail_ego_side_losses = AverageMeter("RailEgoLoss", ":.4f")
     mask_bce_losses = AverageMeter("MaskBCELoss", ":.4f")
     mask_dice_losses = AverageMeter("MaskDICELoss", ":.4f")
     mask_losses = AverageMeter("MaskLoss", ":.4f")
@@ -674,6 +686,7 @@ def train(
             batch_time,
             losses,
             ce_losses,
+            rail_ego_side_losses,
             mask_losses,
             mask_bce_losses,
             mask_dice_losses,
@@ -709,12 +722,17 @@ def train(
 
             loss = output_dict["loss"]
             ce_loss = output_dict["ce_loss"]
+            rail_ego_side_loss = output_dict["rail_ego_side_loss"]
             mask_bce_loss = output_dict["mask_bce_loss"]
             mask_dice_loss = output_dict["mask_dice_loss"]
             mask_loss = output_dict["mask_loss"]
 
             losses.update(loss.item(), input_dict["images"].size(0))
             ce_losses.update(ce_loss.item(), input_dict["images"].size(0))
+            rail_ego_side_losses.update(
+                rail_ego_side_loss.item(),
+                input_dict["images"].size(0),
+            )
             mask_bce_losses.update(mask_bce_loss.item(), input_dict["images"].size(0))
             mask_dice_losses.update(mask_dice_loss.item(), input_dict["images"].size(0))
             mask_losses.update(mask_loss.item(), input_dict["images"].size(0))
@@ -732,6 +750,7 @@ def train(
 
                 losses.all_reduce()
                 ce_losses.all_reduce()
+                rail_ego_side_losses.all_reduce()
                 mask_bce_losses.all_reduce()
                 mask_dice_losses.all_reduce()
                 mask_losses.all_reduce()
@@ -740,6 +759,11 @@ def train(
                 progress.display(global_step + 1)
                 writer.add_scalar("train/loss", losses.avg, global_step)
                 writer.add_scalar("train/ce_loss", ce_losses.avg, global_step)
+                writer.add_scalar(
+                    "train/rail_ego_side_loss",
+                    rail_ego_side_losses.avg,
+                    global_step,
+                )
                 writer.add_scalar(
                     "train/mask_bce_loss", mask_bce_losses.avg, global_step
                 )
@@ -758,6 +782,7 @@ def train(
             data_time.reset()
             losses.reset()
             ce_losses.reset()
+            rail_ego_side_losses.reset()
             mask_bce_losses.reset()
             mask_dice_losses.reset()
             mask_losses.reset()

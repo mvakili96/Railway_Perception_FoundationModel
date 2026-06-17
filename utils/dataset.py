@@ -2,6 +2,7 @@ import glob
 import os
 import random
 import json
+import re
 from PIL import Image
 
 import cv2
@@ -19,7 +20,7 @@ from model.segment_anything.utils.transforms import ResizeLongestSide
 
 from .conversation import get_default_conv_template
 from .data_processing import get_mask_from_json
-from .reason_seg_dataset import ReasonSegDataset
+from .reason_seg_dataset import RAIL_EGO_SIDE_IGNORE_INDEX, ReasonSegDataset
 from .refer import REFER
 from .refer_seg_dataset import ReferSegDataset
 from .sem_seg_dataset import SemSegDataset
@@ -96,6 +97,7 @@ def collate_fn(
     questions_list = []
     sampled_classes_list = []
     reason_seg_weight_maps_list = []
+    rail_ego_side_labels = []
     conversation_is_rail_reasoning = []
     offset_list = [0]
     cnt = 0
@@ -115,6 +117,7 @@ def collate_fn(
                 inference,
             ) = sample
             reason_seg_weight_maps = torch.empty(0)
+            rail_ego_side_label = RAIL_EGO_SIDE_IGNORE_INDEX
             is_rail_reasoning_sample = False
         elif len(sample) == 11:
             (
@@ -128,6 +131,23 @@ def collate_fn(
                 questions,
                 sampled_classes,
                 reason_seg_weight_maps,
+                inference,
+            ) = sample
+            rail_ego_side_label = RAIL_EGO_SIDE_IGNORE_INDEX
+            is_rail_reasoning_sample = f"{os.sep}ReasonSegRail{os.sep}" in image_path
+        elif len(sample) == 12:
+            (
+                image_path,
+                images,
+                images_clip,
+                conversations,
+                masks,
+                label,
+                resize,
+                questions,
+                sampled_classes,
+                reason_seg_weight_maps,
+                rail_ego_side_label,
                 inference,
             ) = sample
             is_rail_reasoning_sample = f"{os.sep}ReasonSegRail{os.sep}" in image_path
@@ -144,6 +164,11 @@ def collate_fn(
         questions_list.append(questions)
         sampled_classes_list.append(sampled_classes)
         reason_seg_weight_maps_list.append(reason_seg_weight_maps.float())
+        if not is_rail_reasoning_sample:
+            rail_ego_side_label = RAIL_EGO_SIDE_IGNORE_INDEX
+        rail_ego_side_labels.extend(
+            [rail_ego_side_label for _ in range(len(conversations))]
+        )
         conversation_is_rail_reasoning.extend(
             [is_rail_reasoning_sample for _ in range(len(conversations))]
         )
@@ -262,6 +287,7 @@ def collate_fn(
         "labels": targets,
         "attention_masks": attention_masks,
         "ce_token_weights": ce_token_weights,
+        "rail_ego_side_labels": torch.LongTensor(rail_ego_side_labels),
         "masks_list": masks_list,
         "label_list": label_list,
         "resize_list": resize_list,

@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import random
+import re
 
 import cv2
 import numpy as np
@@ -17,6 +18,28 @@ from .data_processing import get_mask_from_json
 from .utils import (ANSWER_LIST, DEFAULT_IMAGE_TOKEN,
                     EXPLANATORY_QUESTION_LIST, LONG_QUESTION_LIST,
                     SHORT_QUESTION_LIST)
+
+
+RAIL_REASONING_DECISION_PATTERN = re.compile(
+    r"This is a (?P<switch>turnout|merge) switch\. "
+    r"The right blade is (?P<right_state>open|closed) and the left blade is (?P<left_state>open|closed)\. "
+    r"The open (?P<open_side>right|left) blade and the closed (?P<closed_side>right|left) blade together create a continuous rail "
+    r"connection toward the (?P<ego_path>right-hand|left-hand) path and break continuity with the (?P<other_path>right-hand|left-hand) path\. "
+    r"Therefore, the ego-path follows the (?P<final_path>right-hand|left-hand) path\."
+)
+
+RAIL_EGO_SIDE_TO_LABEL = {"left-hand": 0, "right-hand": 1}
+RAIL_EGO_SIDE_IGNORE_INDEX = -100
+
+
+def parse_rail_ego_side_label(text):
+    match = RAIL_REASONING_DECISION_PATTERN.search(text)
+    if match is None:
+        return RAIL_EGO_SIDE_IGNORE_INDEX
+    return RAIL_EGO_SIDE_TO_LABEL.get(
+        match.group("final_path"),
+        RAIL_EGO_SIDE_IGNORE_INDEX,
+    )
 
 
 class ReasonSegDataset(torch.utils.data.Dataset):
@@ -58,6 +81,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         self.short_question_list = SHORT_QUESTION_LIST
         self.long_question_list = LONG_QUESTION_LIST
         self.answer_list = ANSWER_LIST
+        self.img_to_ego_side_label = {}
 
         reason_seg_data, splits = reason_seg_data.split("|")
         splits = splits.split("_")
@@ -74,18 +98,17 @@ class ReasonSegDataset(torch.utils.data.Dataset):
 
         print("number of reason_seg samples: ", len(images))
 
-        if explanatory != -1:
+        explanation_path = os.path.join(
+            base_image_dir,
+            "reason_seg",
+            reason_seg_data,
+            "explanatory",
+            "train.json",
+        )
+        if os.path.exists(explanation_path):
             self.explanatory_question_list = EXPLANATORY_QUESTION_LIST
             self.img_to_explanation = {}
-            with open(
-                os.path.join(
-                    base_image_dir,
-                    "reason_seg",
-                    reason_seg_data,
-                    "explanatory",
-                    "train.json",
-                )
-            ) as f:
+            with open(explanation_path) as f:
                 items = json.load(f)
             for item in items:
                 img_name = item["image"]
@@ -93,8 +116,14 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                     "query": item["query"],
                     "outputs": item["outputs"],
                 }
+                ego_side_label = parse_rail_ego_side_label(item["outputs"])
+                if ego_side_label != RAIL_EGO_SIDE_IGNORE_INDEX:
+                    self.img_to_ego_side_label[img_name] = ego_side_label
 
             print("len(self.img_to_explanation): ", len(self.img_to_explanation))
+            print("len(self.img_to_ego_side_label): ", len(self.img_to_ego_side_label))
+        else:
+            self.img_to_explanation = {}
 
     def __len__(self):
         return self.samples_per_epoch
@@ -252,4 +281,8 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             questions,
             sampled_sents,
             reason_seg_weight_maps,
+            self.img_to_ego_side_label.get(
+                image_name,
+                RAIL_EGO_SIDE_IGNORE_INDEX,
+            ),
         )

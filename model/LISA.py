@@ -248,8 +248,13 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             "boundary_bce_weight",
             getattr(config, "boundary_bce_weight", 1.0),
         )
+        self.rail_ego_side_loss_weight = kwargs.pop(
+            "rail_ego_side_loss_weight",
+            getattr(config, "rail_ego_side_loss_weight", 0.0),
+        )
         config.boundary_bce_band_width = self.boundary_bce_band_width
         config.boundary_bce_weight = self.boundary_bce_weight
+        config.rail_ego_side_loss_weight = self.rail_ego_side_loss_weight
 
         if not hasattr(config, "train_mask_decoder"):
             config.mm_use_im_start_end = kwargs.pop("use_mm_start_end", True)
@@ -269,6 +274,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         self.model = LisaModel(config, **kwargs)
 
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.rail_ego_side_head = nn.Linear(config.hidden_size, 2)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -310,6 +316,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         label_list: List[torch.Tensor],
         resize_list: List[tuple],
         ce_token_weights: torch.FloatTensor = None,
+        rail_ego_side_labels: torch.LongTensor = None,
         reason_seg_weight_maps_list: List[torch.FloatTensor] = None,
         inference: bool = False,
         **kwargs,
@@ -383,6 +390,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         assert len(self.model.text_hidden_fcs) == 1
         hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states[-1]))
 
+        raw_last_hidden_state = output_hidden_states[-1]
         last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
         pred_embeddings = last_hidden_state[seg_token_mask]
         seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
@@ -490,6 +498,34 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             ce_loss = token_ce.new_tensor(0.0)
 
         ce_loss = ce_loss * self.ce_loss_weight
+        rail_ego_side_loss = ce_loss.new_tensor(0.0)
+        if self.rail_ego_side_loss_weight > 0:
+            dummy_seg_embedding = raw_last_hidden_state.new_zeros(
+                (1, raw_last_hidden_state.shape[-1])
+            )
+            rail_ego_side_loss = (
+                self.rail_ego_side_head(dummy_seg_embedding).sum() * 0.0
+            )
+            if rail_ego_side_labels is not None:
+                rail_ego_side_labels = rail_ego_side_labels.to(
+                    device=seg_token_counts.device,
+                    dtype=torch.long,
+                )
+                seg_labels = torch.repeat_interleave(
+                    rail_ego_side_labels,
+                    seg_token_counts,
+                )
+                valid_seg_labels = seg_labels.ne(IGNORE_INDEX)
+                if valid_seg_labels.any():
+                    raw_seg_embeddings = raw_last_hidden_state[seg_token_mask]
+                    rail_ego_side_logits = self.rail_ego_side_head(
+                        raw_seg_embeddings[valid_seg_labels]
+                    )
+                    rail_ego_side_loss = rail_ego_side_loss + F.cross_entropy(
+                        rail_ego_side_logits.float(),
+                        seg_labels[valid_seg_labels],
+                    )
+
         mask_bce_loss = 0
         mask_dice_loss = 0
         num_masks = 0
@@ -525,11 +561,16 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         mask_dice_loss = self.dice_loss_weight * mask_dice_loss / (num_masks + 1e-8)
         mask_loss = mask_bce_loss + mask_dice_loss
 
-        loss = ce_loss + mask_loss
+        loss = (
+            ce_loss
+            + mask_loss
+            + self.rail_ego_side_loss_weight * rail_ego_side_loss
+        )
 
         return {
             "loss": loss,
             "ce_loss": ce_loss,
+            "rail_ego_side_loss": rail_ego_side_loss,
             "mask_bce_loss": mask_bce_loss,
             "mask_dice_loss": mask_dice_loss,
             "mask_loss": mask_loss,
