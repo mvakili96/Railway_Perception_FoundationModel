@@ -274,7 +274,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         self.model = LisaModel(config, **kwargs)
 
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.rail_ego_side_head = nn.Linear(config.hidden_size, 2)
+        self.rail_ego_side_head = nn.Linear(config.out_dim, 2)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -390,9 +390,9 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         assert len(self.model.text_hidden_fcs) == 1
         hidden_states.append(self.model.text_hidden_fcs[0](output_hidden_states[-1]))
 
-        raw_last_hidden_state = output_hidden_states[-1]
         last_hidden_state = torch.stack(hidden_states, dim=-1).sum(dim=-1)
-        pred_embeddings = last_hidden_state[seg_token_mask]
+        projected_seg_embeddings = last_hidden_state[seg_token_mask]
+        pred_embeddings = projected_seg_embeddings
         seg_token_counts = seg_token_mask.int().sum(-1)  # [bs, ]
 
         seg_token_offset = seg_token_counts.cumsum(-1)
@@ -500,8 +500,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         ce_loss = ce_loss * self.ce_loss_weight
         rail_ego_side_loss = ce_loss.new_tensor(0.0)
         if self.rail_ego_side_loss_weight > 0:
-            dummy_seg_embedding = raw_last_hidden_state.new_zeros(
-                (1, raw_last_hidden_state.shape[-1])
+            dummy_seg_embedding = last_hidden_state.new_zeros(
+                (1, last_hidden_state.shape[-1])
             )
             rail_ego_side_loss = (
                 self.rail_ego_side_head(dummy_seg_embedding).sum() * 0.0
@@ -517,9 +517,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 )
                 valid_seg_labels = seg_labels.ne(IGNORE_INDEX)
                 if valid_seg_labels.any():
-                    raw_seg_embeddings = raw_last_hidden_state[seg_token_mask]
                     rail_ego_side_logits = self.rail_ego_side_head(
-                        raw_seg_embeddings[valid_seg_labels]
+                        projected_seg_embeddings[valid_seg_labels]
                     )
                     rail_ego_side_loss = rail_ego_side_loss + F.cross_entropy(
                         rail_ego_side_logits.float(),
