@@ -141,6 +141,12 @@ def parse_args(args):
         type=float,
         help="Extra pixel weight applied where the ReasonSeg weight-map value is nonzero. 1.0 disables it.",
     )
+    parser.add_argument(
+        "--rail_counterfactual_flip_prob",
+        default=0.0,
+        type=float,
+        help="Probability of horizontally flipping a Rail ReasonSeg sample and swapping its left/right semantics.",
+    )
 
     parser.add_argument("--lora_alpha", default=16, type=int)
     parser.add_argument("--lora_dropout", default=0.05, type=float)
@@ -504,6 +510,7 @@ def main(args):
         explanatory=args.explanatory,
         reason_seg_weight_map_dir_name=args.reason_seg_weight_map_dir_name,
         reason_seg_weight_map_weight=args.reason_seg_weight_map_weight,
+        rail_counterfactual_flip_prob=args.rail_counterfactual_flip_prob,
     )
 
     if args.no_eval == False:

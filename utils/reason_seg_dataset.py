@@ -15,6 +15,8 @@ from model.llava import conversation as conversation_lib
 from model.segment_anything.utils.transforms import ResizeLongestSide
 
 from .data_processing import get_mask_from_json
+from .rail_augmentation import (flip_rail_reasoning_explanation,
+                                horizontal_flip, swap_left_right)
 from .utils import (ANSWER_LIST, DEFAULT_IMAGE_TOKEN,
                     EXPLANATORY_QUESTION_LIST, LONG_QUESTION_LIST,
                     SHORT_QUESTION_LIST)
@@ -62,7 +64,11 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         explanatory=0.1,
         weight_map_dir_name="weight_maps",
         weight_map_weight=1.0,
+        counterfactual_flip_prob=0.0,
     ):
+        if not 0.0 <= counterfactual_flip_prob <= 1.0:
+            raise ValueError("counterfactual_flip_prob must be between 0 and 1")
+
         self.exclude_val = exclude_val
         self.reason_seg_data = reason_seg_data
         self.samples_per_epoch = samples_per_epoch
@@ -70,6 +76,8 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         self.num_classes_per_sample = num_classes_per_sample
         self.weight_map_dir_name = weight_map_dir_name
         self.weight_map_weight = weight_map_weight
+        self.counterfactual_flip_prob = counterfactual_flip_prob
+        self.counterfactual_flip_logged = False
 
         self.base_image_dir = base_image_dir
         self.image_size = image_size
@@ -171,13 +179,27 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         ori_size = image.shape[:2]
+
+        mask, sents, is_sentence = get_mask_from_json(json_path, image)
+        reason_seg_weight_map = self.load_reason_seg_weight_map(image_path)
+        use_counterfactual_flip = (
+            self.counterfactual_flip_prob > 0
+            and random.random() < self.counterfactual_flip_prob
+        )
+        if use_counterfactual_flip:
+            image = horizontal_flip(image)
+            mask = horizontal_flip(mask)
+            if reason_seg_weight_map is not None:
+                reason_seg_weight_map = torch.flip(
+                    reason_seg_weight_map,
+                    dims=(-1,),
+                )
+
         # preprocess image for clip
         image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")[
             "pixel_values"
         ][0]
 
-        mask, sents, is_sentence = get_mask_from_json(json_path, image)
-        reason_seg_weight_map = self.load_reason_seg_weight_map(image_path)
         if len(sents) >= self.num_classes_per_sample:
             sampled_inds = np.random.choice(
                 list(range(len(sents))), size=self.num_classes_per_sample, replace=False
@@ -235,6 +257,13 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             else:
                 answers.append(random.choice(self.answer_list))
 
+            if use_counterfactual_flip:
+                questions[-1] = swap_left_right(questions[-1])
+                answers[-1] = flip_rail_reasoning_explanation(
+                    answers[-1],
+                    RAIL_REASONING_DECISION_PATTERN,
+                )
+
             conversations = []
             conv = conversation_lib.default_conversation.copy()
             roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
@@ -246,6 +275,9 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                 conv.append_message(conv.roles[1], answers[i])
                 conversations.append(conv.get_prompt())
                 i += 1
+
+        if use_counterfactual_flip:
+            sampled_sents = [swap_left_right(text) for text in sampled_sents]
 
         image = self.preprocess(torch.from_numpy(image).permute(2, 0, 1).contiguous())
 
@@ -270,6 +302,31 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             else:
                 reason_seg_weight_maps = torch.empty(0)
 
+        rail_ego_side_label = self.img_to_ego_side_label.get(
+            image_name,
+            RAIL_EGO_SIDE_IGNORE_INDEX,
+        )
+        if (
+            use_counterfactual_flip
+            and rail_ego_side_label != RAIL_EGO_SIDE_IGNORE_INDEX
+        ):
+            rail_ego_side_label = 1 - rail_ego_side_label
+
+        if (
+            use_counterfactual_flip
+            and not self.counterfactual_flip_logged
+            and int(os.environ.get("RANK", "0")) == 0
+        ):
+            worker = torch.utils.data.get_worker_info()
+            worker_id = worker.id if worker is not None else 0
+            print(
+                "[rail counterfactual augmentation] "
+                f"success image={image_name} worker={worker_id} "
+                f"ego_side_label={rail_ego_side_label}",
+                flush=True,
+            )
+            self.counterfactual_flip_logged = True
+
         return (
             image_path,
             image,
@@ -281,8 +338,5 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             questions,
             sampled_sents,
             reason_seg_weight_maps,
-            self.img_to_ego_side_label.get(
-                image_name,
-                RAIL_EGO_SIDE_IGNORE_INDEX,
-            ),
+            rail_ego_side_label,
         )

@@ -326,6 +326,7 @@ class HybridDataset(torch.utils.data.Dataset):
         explanatory=0.1,
         reason_seg_weight_map_dir_name="weight_maps",
         reason_seg_weight_map_weight=1.0,
+        rail_counterfactual_flip_prob=0.0,
     ):
         self.exclude_val = exclude_val
         self.dataset = dataset
@@ -401,6 +402,7 @@ class HybridDataset(torch.utils.data.Dataset):
                         explanatory,
                         reason_seg_weight_map_dir_name,
                         reason_seg_weight_map_weight,
+                        0.0,
                     )
                 )
 
@@ -419,6 +421,7 @@ class HybridDataset(torch.utils.data.Dataset):
                         explanatory,
                         reason_seg_weight_map_dir_name,
                         reason_seg_weight_map_weight,
+                        rail_counterfactual_flip_prob,
                     )
                 )
 
