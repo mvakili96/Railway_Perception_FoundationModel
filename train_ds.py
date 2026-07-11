@@ -30,6 +30,35 @@ from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          intersectionAndUnionGPU)
 
 
+def init_wandb(args):
+    if not args.use_wandb or not args.is_main_process or args.wandb_mode == "disabled":
+        return None
+
+    try:
+        import wandb
+    except ImportError as exc:
+        raise ImportError(
+            "W&B logging was requested with --use_wandb, but wandb is not installed. "
+            "Install it in the environment or add a pip --target path to PYTHONPATH."
+        ) from exc
+
+    wandb_dir = args.wandb_dir or args.log_dir
+    os.makedirs(wandb_dir, exist_ok=True)
+    return wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity or None,
+        name=args.wandb_name or args.exp_name,
+        dir=wandb_dir,
+        mode=args.wandb_mode,
+        config=vars(args),
+    )
+
+
+def wandb_log(wandb_run, metrics, step):
+    if wandb_run is not None:
+        wandb_run.log(metrics, step=step)
+
+
 def parse_args(args):
     parser = argparse.ArgumentParser(description="LISA Model Training")
     parser.add_argument("--local_rank", default=0, type=int, help="node rank")
@@ -82,6 +111,22 @@ def parse_args(args):
     parser.add_argument("--dataset_dir", default="./dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
     parser.add_argument("--exp_name", default="lisa", type=str)
+    parser.add_argument(
+        "--use_wandb",
+        action="store_true",
+        default=False,
+        help="Log training and validation metrics to Weights & Biases on global rank 0.",
+    )
+    parser.add_argument("--wandb_project", default="lisa-rail", type=str)
+    parser.add_argument("--wandb_entity", default="", type=str)
+    parser.add_argument("--wandb_name", default="", type=str)
+    parser.add_argument("--wandb_dir", default="", type=str)
+    parser.add_argument(
+        "--wandb_mode",
+        default="online",
+        type=str,
+        choices=["online", "offline", "disabled"],
+    )
     parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--steps_per_epoch", default=500, type=int)
     parser.add_argument(
@@ -234,6 +279,7 @@ def main(args):
         writer = SummaryWriter(args.log_dir)
     else:
         writer = None
+    wandb_run = init_wandb(args)
 
     # Create model
     tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -458,6 +504,12 @@ def main(args):
                 trainable_params, total_params, 100 * trainable_params / total_params
             )
         )
+        if wandb_run is not None:
+            wandb_run.summary["trainable_params"] = trainable_params
+            wandb_run.summary["total_params"] = total_params
+            wandb_run.summary["trainable_percent"] = (
+                100 * trainable_params / total_params
+            )
 
     clip_trainable_params = []
     base_trainable_params = []
@@ -479,12 +531,17 @@ def main(args):
         warmup_min_lr = [0, 0]
         warmup_max_lr = [args.lr, args.clip_lr]
     if args.is_main_process:
+        base_trainable_count = sum(p.numel() for p in base_trainable_params)
+        clip_trainable_count = sum(p.numel() for p in clip_trainable_params)
         print(
             "optimizer param groups: base_params={} clip_params={}".format(
-                sum(p.numel() for p in base_trainable_params),
-                sum(p.numel() for p in clip_trainable_params),
+                base_trainable_count,
+                clip_trainable_count,
             )
         )
+        if wandb_run is not None:
+            wandb_run.summary["base_trainable_params"] = base_trainable_count
+            wandb_run.summary["clip_trainable_params"] = clip_trainable_count
 
     world_size = args.world_size
     args.distributed = world_size > 1
@@ -629,8 +686,10 @@ def main(args):
     best_score, cur_ciou = 0.0, 0.0
 
     if args.eval_only:
-        giou, ciou = validate(val_loader, model_engine, 0, writer, args)
-        exit()
+        giou, ciou = validate(val_loader, model_engine, 0, writer, args, wandb_run)
+        if wandb_run is not None:
+            wandb_run.finish()
+        return
 
     for epoch in range(args.start_epoch, args.epochs):
         # train for one epoch
@@ -642,10 +701,18 @@ def main(args):
             writer,
             train_iter,
             args,
+            wandb_run,
         )
 
         if args.no_eval == False:
-            giou, ciou = validate(val_loader, model_engine, epoch, writer, args)
+            giou, ciou = validate(
+                val_loader,
+                model_engine,
+                epoch,
+                writer,
+                args,
+                wandb_run,
+            )
             is_best = giou > best_score
             best_score = max(giou, best_score)
             cur_ciou = ciou if is_best else cur_ciou
@@ -667,6 +734,9 @@ def main(args):
             torch.distributed.barrier()
             model_engine.save_checkpoint(save_dir)
 
+    if wandb_run is not None:
+        wandb_run.finish()
+
 
 def train(
     train_loader,
@@ -676,6 +746,7 @@ def train(
     writer,
     train_iter,
     args,
+    wandb_run,
 ):
     """Main training loop."""
     batch_time = AverageMeter("Time", ":6.3f")
@@ -705,6 +776,7 @@ def train(
     model.train()
     end = time.time()
     for global_step in range(args.steps_per_epoch):
+        log_step = epoch * args.steps_per_epoch + global_step
         for i in range(args.grad_accumulation_steps):
             try:
                 input_dict = next(train_iter)
@@ -764,26 +836,45 @@ def train(
 
             if args.is_main_process:
                 progress.display(global_step + 1)
-                writer.add_scalar("train/loss", losses.avg, global_step)
-                writer.add_scalar("train/ce_loss", ce_losses.avg, global_step)
+                writer.add_scalar("train/loss", losses.avg, log_step)
+                writer.add_scalar("train/ce_loss", ce_losses.avg, log_step)
                 writer.add_scalar(
                     "train/rail_ego_side_loss",
                     rail_ego_side_losses.avg,
-                    global_step,
+                    log_step,
                 )
                 writer.add_scalar(
-                    "train/mask_bce_loss", mask_bce_losses.avg, global_step
+                    "train/mask_bce_loss", mask_bce_losses.avg, log_step
                 )
                 writer.add_scalar(
-                    "train/mask_dice_loss", mask_dice_losses.avg, global_step
+                    "train/mask_dice_loss", mask_dice_losses.avg, log_step
                 )
-                writer.add_scalar("train/mask_loss", mask_losses.avg, global_step)
+                writer.add_scalar("train/mask_loss", mask_losses.avg, log_step)
                 writer.add_scalar(
-                    "metrics/total_secs_per_batch", batch_time.avg, global_step
+                    "metrics/total_secs_per_batch", batch_time.avg, log_step
                 )
                 writer.add_scalar(
-                    "metrics/data_secs_per_batch", data_time.avg, global_step
+                    "metrics/data_secs_per_batch", data_time.avg, log_step
                 )
+                train_metrics = {
+                    "train/loss": losses.avg,
+                    "train/ce_loss": ce_losses.avg,
+                    "train/rail_ego_side_loss": rail_ego_side_losses.avg,
+                    "train/mask_bce_loss": mask_bce_losses.avg,
+                    "train/mask_dice_loss": mask_dice_losses.avg,
+                    "train/mask_loss": mask_losses.avg,
+                    "metrics/total_secs_per_batch": batch_time.avg,
+                    "metrics/data_secs_per_batch": data_time.avg,
+                    "epoch": epoch,
+                }
+                if torch.cuda.is_available():
+                    train_metrics["metrics/cuda_mem_allocated_gb"] = (
+                        torch.cuda.memory_allocated() / 1024**3
+                    )
+                    train_metrics["metrics/cuda_max_mem_allocated_gb"] = (
+                        torch.cuda.max_memory_allocated() / 1024**3
+                    )
+                wandb_log(wandb_run, train_metrics, log_step)
 
             batch_time.reset()
             data_time.reset()
@@ -797,12 +888,22 @@ def train(
         if global_step != 0:
             curr_lr = scheduler.get_last_lr()
             if args.is_main_process:
-                writer.add_scalar("train/lr", curr_lr[0], global_step)
+                writer.add_scalar("train/lr", curr_lr[0], log_step)
+                writer.add_scalar("train/lr_base", curr_lr[0], log_step)
+                lr_metrics = {
+                    "train/lr": curr_lr[0],
+                    "train/lr_base": curr_lr[0],
+                    "epoch": epoch,
+                }
+                if len(curr_lr) > 1:
+                    writer.add_scalar("train/lr_clip", curr_lr[1], log_step)
+                    lr_metrics["train/lr_clip"] = curr_lr[1]
+                wandb_log(wandb_run, lr_metrics, log_step)
 
     return train_iter
 
 
-def validate(val_loader, model_engine, epoch, writer, args):
+def validate(val_loader, model_engine, epoch, writer, args, wandb_run):
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -857,6 +958,15 @@ def validate(val_loader, model_engine, epoch, writer, args):
     if args.is_main_process:
         writer.add_scalar("val/giou", giou, epoch)
         writer.add_scalar("val/ciou", ciou, epoch)
+        wandb_log(
+            wandb_run,
+            {
+                "val/giou": giou,
+                "val/ciou": ciou,
+                "epoch": epoch,
+            },
+            (epoch + 1) * args.steps_per_epoch,
+        )
         print("giou: {:.4f}, ciou: {:.4f}".format(giou, ciou))
 
     return giou, ciou
