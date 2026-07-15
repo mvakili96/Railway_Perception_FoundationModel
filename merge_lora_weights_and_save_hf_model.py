@@ -57,6 +57,7 @@ def parse_args(args):
 
 def main(args):
     args = parse_args(args)
+    args.save_path = os.path.abspath(args.save_path)
     os.makedirs(args.vis_save_path, exist_ok=True)
 
     # Create model
@@ -143,16 +144,40 @@ def main(args):
 
     model.resize_token_embeddings(len(tokenizer))
 
+
     state_dict = torch.load(args.weight, map_location="cpu")
+    model_keys = set(model.state_dict().keys())
+    for key in list(state_dict.keys()):
+        if "rail_ego_side_head" in key and key not in model_keys:
+            print("Dropping training-only key not present in merge model:", key)
+            state_dict.pop(key)
     model.load_state_dict(state_dict, strict=True)
 
     model = model.merge_and_unload()
+    vision_tower = model.get_model().get_vision_tower()
+    vision_tower_save_path = os.path.join(args.save_path, "vision_tower")
+    if (
+        vision_tower is not None
+        and getattr(vision_tower, "is_loaded", False)
+        and hasattr(vision_tower, "vision_tower")
+    ):
+        os.makedirs(vision_tower_save_path, exist_ok=True)
+        vision_tower.vision_tower.save_pretrained(vision_tower_save_path)
+        if hasattr(vision_tower, "image_processor"):
+            vision_tower.image_processor.save_pretrained(vision_tower_save_path)
+        model.config.vision_tower = vision_tower_save_path
+        model.config.mm_vision_tower = vision_tower_save_path
+        model.get_model().config.vision_tower = vision_tower_save_path
+        model.get_model().config.mm_vision_tower = vision_tower_save_path
+        print("Saved vision tower to:", vision_tower_save_path)
+
     state_dict = {}
     for k, v in model.state_dict().items():
         if "vision_tower" not in k:
             state_dict[k] = v
     model.save_pretrained(args.save_path, state_dict=state_dict)
     tokenizer.save_pretrained(args.save_path)
+    print("Saved merged HF model to:", args.save_path)
 
 
 if __name__ == "__main__":
