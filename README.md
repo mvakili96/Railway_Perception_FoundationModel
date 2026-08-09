@@ -8,58 +8,56 @@
 [![Built on LISA](https://img.shields.io/badge/Built%20on-LISA-2563eb)](https://github.com/JIA-Lab-research/LISA)
 ![Status: Research prototype](https://img.shields.io/badge/Status-Research%20prototype-f59e0b)
 
-This repository contains the official implementation of [Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models](https://doi.org/10.5194/isprs-archives-XLIX-B3-2026-89-2026), together with newer model and training extensions. It combines LLaVA/CLIP visual reasoning with SAM mask decoding to identify the valid route directly ahead of a train.
-
-## Why this problem matters
-
-At a railway switch, segmenting every visible track bed is not enough: multiple branches may appear geometrically plausible, but only one is continuous with the train's current track. A perception model must interpret switch type, blade state, rail continuity, and route direction before selecting the correct pixels.
-
-This project adapts [LISA](https://github.com/JIA-Lab-research/LISA) to connect that rail-specific reasoning with binary ego-route segmentation. Given a forward-facing image and a natural-language route prompt, it produces a valid-route mask and can also return a structured textual rationale.
-
-### What it does
-
-- Segments the continuous ego-route instead of treating every visible track as traversable.
-- Reasons over turnout/merge geometry, blade state, rail gaps, and left/right route continuity.
-- Projects the language model's `[SEG]` representation into SAM for pixel-level decoding, with an optional route rationale.
+This is the official implementation of [Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models](https://doi.org/10.5194/isprs-archives-XLIX-B3-2026-89-2026), with newer model and training updates. It adapts LISA's LLaVA/CLIP and SAM paths to select the physically continuous ego-route at railway switches, producing a binary mask and an optional rationale from an image and text prompt.
 
 > [!CAUTION]
-> This is a research prototype, not an operational train-control or safety system. Masks and generated rationales can be incorrect or mutually inconsistent and must not be used for safety-critical decisions.
+> Research prototype only. Masks and rationales can be wrong or inconsistent and must not be used for safety-critical decisions.
 
-## Highlights from the Attached Paper
-- Railway switch understanding is formulated as **reasoning-guided ego-path segmentation**.
-- LISA is adapted with rail-specific prompts, polygon masks, and explanation supervision.
-- Initial evaluation uses RailSem19-based split (final 2,500 images for validation/testing protocol).
-- Strong gains over base LISA checkpoint are reported under both reasoning and simple prompts.
+## Results
 
-### Reported Performance
-Prompt A: `By examining rail continuity and switch geometry, segment the active ego-route.`
+The latest model was evaluated on 2,000 held-out images: 1,822 switch-independent and 178 switch-dependent. Scores are percentages against the ground-truth ego-route using the reasoning-oriented route prompt.
 
-Prompt B: `Segment the track bed in this image.`
-
-| Model | A CIoU (%) | A GIoU (%) | B CIoU (%) | B GIoU (%) |
+| Model | Switch-independent CIoU | Switch-independent GIoU | Switch-dependent CIoU | Switch-dependent GIoU |
 |---|---:|---:|---:|---:|
-| LISA (base) | 52.3 | 54.1 | 24.8 | 25.2 |
-| Rail-finetuned LISA | **81.7** | **83.4** | **81.9** | **83.0** |
+| Original LISA | 30.07 | 32.39 | 36.59 | 39.73 |
+| Rail-finetuned LISA — semantic only | 66.23 | 66.15 | 56.95 | 57.97 |
+| **Rail-finetuned LISA — semantic + reasoning** | **89.00** | **88.34** | **90.49** | **90.33** |
 
-<br>
+CIoU pools pixels across the subset; GIoU averages image-level IoU. Compared with semantic-only training, joint training gains 22.77/22.19 CIoU/GIoU points on switch-independent scenes and 33.53/32.35 on switch-dependent scenes; all paired-bootstrap 95% confidence intervals are above zero.
 
-### Multimodal finetuning flowchart for a sample data
-This flowchart summarizes the multimodal finetuning pipeline used in this project. Following the LISA design, the training stream mixes semantic rail supervision with rail reasoning segmentation supervision: semantic samples teach the model broad rail scene context, while reasoning samples teach it to choose the valid ego-route from switch geometry and language prompts. The random branching in the pipeline reflects how the model alternates between segmentation-only supervision and explanation-aware supervision during training.
+### Paired-bootstrap comparison
 
-<br>
+Improvements over semantic-only finetuning from 10,000 paired image-level resamples:
 
-![Figure 1 Placeholder](docs/paper_figures/flowchart.png)
+| Scene type | Metric | Improvement | 95% confidence interval |
+|---|---|---:|---:|
+| Switch-independent | CIoU | +22.77 | [22.00, 23.53] |
+| Switch-independent | GIoU | +22.19 | [21.50, 22.89] |
+| Switch-dependent | CIoU | +33.53 | [31.10, 36.07] |
+| Switch-dependent | GIoU | +32.35 | [30.10, 34.68] |
 
-<br>
+### Route-logic audit
 
-### Qualitative results (success / inconsistency / failure cases)
-This figure highlights both the strengths and current limitations of the rail-finetuned model. The input query here is: "By examining rail continuity and switch geometry, segment the active ego-route and explain why". Some examples show accurate ego-path masks with coherent explanations, while others reveal a gap between mask prediction and verbal reasoning: the mask may be correct but the explanation may contradict the visible switch geometry, and in harder scenes the explanation can be partially plausible even when the predicted mask fails. These cases are useful for understanding where stronger supervision and more faithful reasoning evaluation are still needed.
+Results on 30 switch-dependent images, balanced separately by switch type and route direction:
 
-<br>
+| Assessment | Correct |
+|---|---:|
+| Strict branch-aware mask | 24/30 (80.0%) |
+| Switch type in rationale | 26/30 (86.7%) |
+| Active-route direction in rationale | 21/30 (70.0%) |
+| Both rationale fields | 18/30 (60.0%) |
+| Correct mask **and** both rationale fields | 13/30 (43.3%) |
 
-![Figure 2 Placeholder](docs/paper_figures/results.png)
+Evaluation notes:
 
-<br>
+- A generic track-bed prompt produces lower ego-route overlap, but this is not an all-track-bed accuracy measurement.
+- Shared track regions can hide wrong-branch predictions in aggregate IoU; rationales are auxiliary outputs, not verified explanations.
+
+### Qualitative examples
+
+![Six railway scenes with predicted ego-route masks in red and generated route rationales.](docs/readme/qualitative-results.png)
+
+Red overlays are predicted masks; adjacent text is model-generated.
 
 ## What Changed vs Original LISA
 - Added rail reasoning dataset branch: `reason_seg_rail` (`ReasonSegRail|train`).
