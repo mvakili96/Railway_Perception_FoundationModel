@@ -1,18 +1,29 @@
-# Reasoning-guided Ego-path Segmentation for Autonomous Trains
+# Railway Perception Foundation Model
 
-[![Built on LISA (CVPR 2024)](https://img.shields.io/badge/Built%20on-LISA%20(CVPR%202024)-blue)](https://github.com/JIA-Lab-research/LISA)
+### Reasoning-guided ego-path segmentation for railway switches
 
-Official repository for the paper:
-**Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models**.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-2ea44f.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
+[![Built on LISA](https://img.shields.io/badge/Built%20on-LISA-2563eb)](https://github.com/JIA-Lab-research/LISA)
+![Status: Research prototype](https://img.shields.io/badge/Status-Research%20prototype-f59e0b)
 
-This project is a railway-domain adaptation of LISA and is **forked from / built upon** the original LISA repository:
-[https://github.com/JIA-Lab-research/LISA](https://github.com/JIA-Lab-research/LISA)
+This repository contains the official implementation of [Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models](https://doi.org/10.5194/isprs-archives-XLIX-B3-2026-89-2026), together with newer model and training extensions. It combines LLaVA/CLIP visual reasoning with SAM mask decoding to identify the valid route directly ahead of a train.
 
-## Overview
-Autonomous train perception in switch regions is not only a segmentation problem, but also a reasoning problem.
-Given a forward-facing rail image and a language query, the model predicts:
-1. The valid **ego-path mask**.
-2. An optional **textual explanation** grounded in switch geometry (blade-stock contact, rail gap, path continuity).
+## Why this problem matters
+
+At a railway switch, segmenting every visible track bed is not enough: multiple branches may appear geometrically plausible, but only one is continuous with the train's current track. A perception model must interpret switch type, blade state, rail continuity, and route direction before selecting the correct pixels.
+
+This project adapts [LISA](https://github.com/JIA-Lab-research/LISA) to connect that rail-specific reasoning with binary ego-route segmentation. Given a forward-facing image and a natural-language route prompt, it produces a valid-route mask and can also return a structured textual rationale.
+
+### What it does
+
+- Segments the continuous ego-route instead of treating every visible track as traversable.
+- Reasons over turnout/merge geometry, blade state, rail gaps, and left/right route continuity.
+- Projects the language model's `[SEG]` representation into SAM for pixel-level decoding, with an optional route rationale.
+
+> [!CAUTION]
+> This is a research prototype, not an operational train-control or safety system. Masks and generated rationales can be incorrect or mutually inconsistent and must not be used for safety-critical decisions.
 
 ## Highlights from the Attached Paper
 - Railway switch understanding is formulated as **reasoning-guided ego-path segmentation**.
@@ -143,4 +154,3 @@ This work is built upon:
 - [LISA](https://github.com/JIA-Lab-research/LISA)
 - [LLaVA](https://github.com/haotian-liu/LLaVA)
 - [Segment Anything (SAM)](https://github.com/facebookresearch/segment-anything)
-

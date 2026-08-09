@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img" aria-labelledby="title desc">
+  <title id="title">Railway-adapted LISA architecture</title>
+  <desc id="desc">Two image paths connect CLIP and LLaVA reasoning to SAM mask decoding through the projected segmentation token.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="3.5" markerHeight="3.5" refX="3.25" refY="1.75" orient="auto">
+      <path d="M0,0 L3.5,1.75 L0,3.5 Z" fill="#36566a"/>
+    </marker>
+    <marker id="arrowTrain" markerWidth="3.5" markerHeight="3.5" refX="3.25" refY="1.75" orient="auto">
+      <path d="M0,0 L3.5,1.75 L0,3.5 Z" fill="#e87945"/>
+    </marker>
+    <linearGradient id="head" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0b3146"/><stop offset="1" stop-color="#176b87"/>
+    </linearGradient>
+    <style>
+      .txt{font-family:Inter,Segoe UI,Arial,sans-serif;fill:#173142}
+      .small{font-size:15px}.body{font-size:17px}.label{font-size:18px;font-weight:700}.lane{font-size:15px;font-weight:700;letter-spacing:1px}
+      .edge{fill:none;stroke:#36566a;stroke-width:2;marker-end:url(#arrow)}
+      .trainEdge{fill:none;stroke:#e87945;stroke-width:2;stroke-dasharray:7 6;marker-end:url(#arrowTrain)}
+      .box{stroke-width:2}.train{fill:#d9f5e5;stroke:#238557}.partial{fill:#dcecff;stroke:#3777b5}.frozen{fill:#eceff3;stroke:#7b8794;stroke-dasharray:6 4}.output{fill:#eceff3;stroke:#7b8794}
+    </style>
+  </defs>
+
+  <rect width="1400" height="820" rx="24" fill="#f8fbfc"/>
+  <rect x="32" y="28" width="1336" height="76" rx="18" fill="url(#head)"/>
+  <text x="68" y="64" fill="#fff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="27" font-weight="750">Railway-adapted LISA</text>
+  <text x="68" y="89" fill="#c9e6f1" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="16">Language-guided switch reasoning connected to pixel-level route segmentation</text>
+
+  <!-- Inputs -->
+  <rect x="50" y="175" width="165" height="94" rx="16" class="box frozen"/>
+  <text x="132" y="211" text-anchor="middle" class="txt label">Rail image</text>
+  <text x="132" y="239" text-anchor="middle" class="txt small">RGB frame</text>
+  <rect x="50" y="335" width="165" height="94" rx="16" class="box frozen"/>
+  <text x="132" y="372" text-anchor="middle" class="txt label">Route prompt</text>
+  <text x="132" y="400" text-anchor="middle" class="txt small">switch geometry +</text>
+  <text x="132" y="420" text-anchor="middle" class="txt small">segmentation request</text>
+
+  <!-- Vision-language lane -->
+  <text x="270" y="145" class="txt lane" fill="#176b87">VISION–LANGUAGE REASONING PATH</text>
+  <rect x="270" y="175" width="190" height="94" rx="16" class="box partial"/>
+  <text x="365" y="211" text-anchor="middle" class="txt label">CLIP vision tower</text>
+  <text x="365" y="239" text-anchor="middle" class="txt small">final 8 blocks tuned*</text>
+  <rect x="510" y="175" width="160" height="94" rx="16" class="box train"/>
+  <text x="590" y="211" text-anchor="middle" class="txt label">MM projector</text>
+  <text x="590" y="239" text-anchor="middle" class="txt small">vision → language</text>
+  <rect x="720" y="175" width="220" height="160" rx="16" class="box partial"/>
+  <text x="830" y="211" text-anchor="middle" class="txt label">LLaVA 7B</text>
+  <text x="830" y="239" text-anchor="middle" class="txt small">LoRA adapters + heads</text>
+  <line x1="746" y1="262" x2="914" y2="262" stroke="#aac1ce"/>
+  <text x="830" y="289" text-anchor="middle" class="txt small">structured rail reasoning</text>
+  <text x="830" y="312" text-anchor="middle" class="txt small">and [SEG] generation</text>
+  <rect x="990" y="175" width="180" height="94" rx="16" class="box output"/>
+  <text x="1080" y="211" text-anchor="middle" class="txt label">Rationale</text>
+  <text x="1080" y="239" text-anchor="middle" class="txt small">+ [SEG] token</text>
+
+  <!-- Seg token bridge -->
+  <rect x="730" y="395" width="200" height="92" rx="16" class="box train"/>
+  <text x="830" y="431" text-anchor="middle" class="txt label">[SEG] projection</text>
+  <text x="830" y="459" text-anchor="middle" class="txt small">LLM hidden state → 256-D</text>
+
+  <!-- SAM lane -->
+  <text x="270" y="555" class="txt lane" fill="#176b87">PIXEL-LEVEL SEGMENTATION PATH</text>
+  <rect x="270" y="585" width="190" height="94" rx="16" class="box partial"/>
+  <text x="365" y="621" text-anchor="middle" class="txt label">SAM ViT-H encoder</text>
+  <text x="365" y="649" text-anchor="middle" class="txt small">final 16 blocks tuned*</text>
+  <rect x="510" y="585" width="175" height="94" rx="16" class="box train"/>
+  <text x="597" y="621" text-anchor="middle" class="txt label">Prompt encoder</text>
+  <text x="597" y="649" text-anchor="middle" class="txt small">[SEG] embedding</text>
+  <rect x="735" y="585" width="180" height="94" rx="16" class="box train"/>
+  <text x="825" y="621" text-anchor="middle" class="txt label">Mask decoder</text>
+  <text x="825" y="649" text-anchor="middle" class="txt small">image + prompt features</text>
+  <rect x="975" y="585" width="195" height="94" rx="16" class="box output"/>
+  <text x="1072" y="621" text-anchor="middle" class="txt label">Ego-route mask</text>
+  <text x="1072" y="649" text-anchor="middle" class="txt small">raw mask + overlay</text>
+
+  <!-- Auxiliary head -->
+  <rect x="1010" y="395" width="205" height="92" rx="16" class="box train"/>
+  <text x="1112" y="430" text-anchor="middle" class="txt label">Ego-side head</text>
+  <text x="1112" y="457" text-anchor="middle" class="txt small">left/right · training only</text>
+
+  <!-- Connections -->
+  <path d="M215 207 H270" class="edge"/>
+  <path d="M460 222 H510" class="edge"/>
+  <path d="M670 222 H720" class="edge"/>
+  <path d="M215 382 H680 Q705 382 720 315" class="edge"/>
+  <path d="M940 222 H990" class="edge"/>
+  <path d="M830 335 V395" class="edge"/>
+  <path d="M50 244 H24 V632 H270" class="edge"/>
+  <path d="M460 652 V705 H825 V679" class="edge"/>
+  <path d="M830 487 V540 Q830 560 650 560 Q597 560 597 585" class="edge"/>
+  <path d="M685 632 H735" class="edge"/>
+  <path d="M915 632 H975" class="edge"/>
+  <path d="M930 441 H1010" class="trainEdge"/>
+
+  <!-- Loss / legend -->
+  <rect x="50" y="728" width="858" height="58" rx="14" fill="#edf5f8" stroke="#c3d7e1"/>
+  <text x="72" y="763" class="txt body"><tspan font-weight="700">Training signals:</tspan> token-weighted language CE + mask BCE + Dice + auxiliary ego-side CE</text>
+  <rect x="945" y="721" width="405" height="72" rx="14" fill="#ffffff" stroke="#c3d7e1"/>
+  <rect x="967" y="742" width="24" height="18" rx="4" class="train box"/><text x="1001" y="757" class="txt small">trainable</text>
+  <rect x="1080" y="742" width="24" height="18" rx="4" class="partial box"/><text x="1114" y="757" class="txt small">partly tuned</text>
+  <rect x="1220" y="742" width="24" height="18" rx="4" class="frozen box"/><text x="1254" y="757" class="txt small">input / fixed</text>
+  <text x="1360" y="704" text-anchor="end" class="txt small" fill="#607786">* current reference configuration</text>
+</svg>
