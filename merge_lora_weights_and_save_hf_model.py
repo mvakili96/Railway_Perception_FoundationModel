@@ -33,7 +33,7 @@ def parse_args(args):
     parser.add_argument("--vision_pretrained", default="PATH_TO_SAM_ViT-H", type=str)
     parser.add_argument("--out_dim", default=256, type=int)
     parser.add_argument("--image_size", default=1024, type=int, help="image size")
-    parser.add_argument("--model_max_length", default=512, type=int)
+    parser.add_argument("--model_max_length", default=1024, type=int)
     parser.add_argument(
         "--vision-tower", default="openai/clip-vit-large-patch14", type=str
     )
@@ -144,7 +144,6 @@ def main(args):
 
     model.resize_token_embeddings(len(tokenizer))
 
-
     state_dict = torch.load(args.weight, map_location="cpu")
     model_keys = set(model.state_dict().keys())
     for key in list(state_dict.keys()):
@@ -154,6 +153,7 @@ def main(args):
     model.load_state_dict(state_dict, strict=True)
 
     model = model.merge_and_unload()
+
     vision_tower = model.get_model().get_vision_tower()
     vision_tower_save_path = os.path.join(args.save_path, "vision_tower")
     if (
@@ -178,7 +178,6 @@ def main(args):
     model.save_pretrained(args.save_path, state_dict=state_dict)
     tokenizer.save_pretrained(args.save_path)
     print("Saved merged HF model to:", args.save_path)
-
 
 if __name__ == "__main__":
     main(sys.argv[1:])

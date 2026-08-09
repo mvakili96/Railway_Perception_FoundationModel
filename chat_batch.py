@@ -27,8 +27,9 @@ def parse_args(args):
         choices=["fp32", "bf16", "fp16"],
         help="precision for inference",
     )
+    parser.add_argument("--mask_save_path", default="./mask_output", type=str)
     parser.add_argument("--image_size", default=1024, type=int, help="image size")
-    parser.add_argument("--model_max_length", default=512, type=int)
+    parser.add_argument("--model_max_length", default=1024, type=int)
     parser.add_argument("--lora_r", default=8, type=int)
     parser.add_argument(
         "--vision-tower", default="openai/clip-vit-large-patch14", type=str
@@ -71,6 +72,7 @@ def preprocess(
 def main(args):
     args = parse_args(args)
     os.makedirs(args.vis_save_path, exist_ok=True)
+    os.makedirs(args.mask_save_path, exist_ok=True)
 
     # Create model
     tokenizer = AutoTokenizer.from_pretrained(
@@ -156,32 +158,44 @@ def main(args):
 
     model.eval()
     
-    flag_HPC_demo = True
-    while flag_HPC_demo:
-        flag_HPC_demo = False
-        conv = conversation_lib.conv_templates[args.conv_type].copy()
-        conv.messages = []
+    conv = conversation_lib.conv_templates[args.conv_type].copy()
+    conv.messages = []
 
-        # prompt = input("Please input your prompt: ")
-        prompt = args.prompt
-        prompt = DEFAULT_IMAGE_TOKEN + "\n" + prompt
-        if args.use_mm_start_end:
-            replace_token = (
-                DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN
-            )
-            prompt = prompt.replace(DEFAULT_IMAGE_TOKEN, replace_token)
+    prompt = args.prompt
+    prompt = DEFAULT_IMAGE_TOKEN + "\n" + prompt
+    if args.use_mm_start_end:
+        replace_token = (
+            DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN
+        )
+        prompt = prompt.replace(DEFAULT_IMAGE_TOKEN, replace_token)
 
-        conv.append_message(conv.roles[0], prompt)
-        conv.append_message(conv.roles[1], "")
-        prompt = conv.get_prompt()
+    conv.append_message(conv.roles[0], prompt)
+    conv.append_message(conv.roles[1], "")
+    prompt = conv.get_prompt()
 
-        # image_path = input("Please input the image path: ")
-        image_path = args.image_path
-        if not os.path.exists(image_path):
-            print("File not found in {}".format(image_path))
+    image_path = args.image_path
+    if os.path.isdir(image_path):
+        image_paths = sorted(
+            [
+                os.path.join(image_path, file_name)
+                for file_name in os.listdir(image_path)
+                if file_name.lower().endswith((".jpg", ".jpeg", ".png"))
+            ]
+        )
+        if len(image_paths) == 0:
+            print("No image files found in {}".format(image_path))
+        
+    elif os.path.isfile(image_path):
+        image_paths = [image_path]
+    else:
+        print("File not found in {}".format(image_path))
+
+    for image_path in image_paths:
+        image_np = cv2.imread(image_path)
+        if image_np is None:
+            print("Failed to read image {}".format(image_path))
             continue
 
-        image_np = cv2.imread(image_path)
         image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
         original_size_list = [image_np.shape[:2]]
 
@@ -232,6 +246,7 @@ def main(args):
         text_output = text_output.replace("\n", "").replace("  ", " ")
         print("text_output: ", text_output)
 
+        image_name = os.path.splitext(os.path.basename(image_path))[0]
         for i, pred_mask in enumerate(pred_masks):
             if pred_mask.shape[0] == 0:
                 continue
@@ -239,14 +254,14 @@ def main(args):
             pred_mask = pred_mask.detach().cpu().numpy()[0]
             pred_mask = pred_mask > 0
 
-            save_path = "{}/{}_mask_{}.jpg".format(
-                args.vis_save_path, image_path.split("/")[-1].split(".")[0], i
+            save_path = "{}/{}.jpg".format(
+                args.mask_save_path, image_name
             )
             cv2.imwrite(save_path, pred_mask * 100)
             print("{} has been saved.".format(save_path))
 
-            save_path = "{}/{}_masked_img_{}.jpg".format(
-                args.vis_save_path, image_path.split("/")[-1].split(".")[0], i
+            save_path = "{}/{}.jpg".format(
+                args.vis_save_path, image_name
             )
             save_img = image_np.copy()
             save_img[pred_mask] = (
@@ -260,3 +275,4 @@ def main(args):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+
