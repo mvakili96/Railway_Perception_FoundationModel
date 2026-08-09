@@ -21,57 +21,19 @@ from model.segment_anything.utils.transforms import ResizeLongestSide
 from .conversation import get_default_conv_template
 from .data_processing import get_mask_from_json
 from .reason_seg_dataset import RAIL_EGO_SIDE_IGNORE_INDEX, ReasonSegDataset
+
+from .reason_seg_dataset import ReasonSegDataset
+from .rail_reasoning import (
+    RAIL_REASONING_DECISION_GROUP_WEIGHTS,
+    SEG_TOKEN_CE_WEIGHT,
+    locate_rail_reasoning_group_token_positions,
+)
 from .refer import REFER
 from .refer_seg_dataset import ReferSegDataset
 from .sem_seg_dataset import SemSegDataset
 from .utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                     DEFAULT_IMAGE_TOKEN)
 from .vqa_dataset import VQADataset
-
-RAIL_REASONING_DECISION_PATTERN = re.compile(
-    r"This is a (?P<switch>turnout|merge) switch\. "
-    r"The right blade is (?P<right_state>open|closed) and the left blade is (?P<left_state>open|closed)\. "
-    r"The open (?P<open_side>right|left) blade and the closed (?P<closed_side>right|left) blade together create a continuous rail "
-    r"connection toward the (?P<ego_path>right-hand|left-hand) path and break continuity with the (?P<other_path>right-hand|left-hand) path\. "
-    r"Therefore, the ego-path follows the (?P<final_path>right-hand|left-hand) path\."
-    r"(?: (?:It is \\[SEG\\]\.|Sure, \\[SEG\\]\.|Sure, it is \\[SEG\\]\.|Sure, the segmentation result is \\[SEG\\]\.|\\[SEG\\]\.))?$"
-)
-
-# Per-slot CE weights for Rail ReasonSeg explanations. Slots not listed here default to 1.0.
-RAIL_REASONING_DECISION_GROUP_WEIGHTS = {
-    "switch": 3.0,
-    "right_state": 2.5,
-    "left_state": 2.5,
-    "open_side": 2.5,
-    "closed_side": 2.5,
-    "ego_path": 3.0,
-    "other_path": 2.0,
-    "final_path": 3.5,
-}
-
-# Shared CE weight for the [SEG] token across all mask-producing scenarios.
-# Set to 1.0 to disable extra weighting.
-SEG_TOKEN_CE_WEIGHT = 3.0
-
-def build_rail_reasoning_ce_weights(assistant_text, tokenizer, target_len):
-    weights = torch.ones(target_len, dtype=torch.float32)
-
-    match = RAIL_REASONING_DECISION_PATTERN.search(assistant_text)
-    if match is None:
-        return weights
-
-    for group_name, group_weight in RAIL_REASONING_DECISION_GROUP_WEIGHTS.items():
-        if group_weight <= 1.0:
-            continue
-        char_start, char_end = match.span(group_name)
-        token_start = len(tokenizer(assistant_text[:char_start], add_special_tokens=False).input_ids)
-        token_end = len(tokenizer(assistant_text[:char_end], add_special_tokens=False).input_ids)
-        token_start = max(0, min(target_len, token_start))
-        token_end = max(token_start, min(target_len, token_end))
-        if token_end > token_start:
-            weights[token_start:token_end] = group_weight
-
-    return weights
 
 def apply_token_sequence_weight(token_weights, token_ids, token_sequence, weight):
     if weight <= 1.0 or len(token_sequence) == 0:
@@ -102,6 +64,7 @@ def collate_fn(
     offset_list = [0]
     cnt = 0
     inferences = []
+
     for sample in batch:
         if len(sample) == 10:
             (
@@ -198,18 +161,30 @@ def collate_fn(
     conv = conversation_lib.default_conversation.copy()
     targets = input_ids.clone()
     ce_token_weights = torch.ones_like(targets, dtype=torch.float32)
+    reasoning_decision_token_masks = torch.zeros_like(targets, dtype=torch.bool)
+    rail_switch_token_masks = torch.zeros_like(targets, dtype=torch.bool)
+    rail_right_state_token_masks = torch.zeros_like(targets, dtype=torch.bool)
+
     seg_token_ids = tokenizer("[SEG]", add_special_tokens=False).input_ids
 
     if conv_type == "llava_v1":
         sep = conv.sep + conv.roles[1] + ": "
     else:
         sep = "[/INST] "
-        
-    for conversation, input_id, target, token_weight, is_rail_reasoning in zip(
-        conversation_list, input_ids, targets, ce_token_weights, conversation_is_rail_reasoning
-    ):       
+    
+    for (
+        conversation_idx,
+        (conversation, input_id, target, token_weight, is_rail_reasoning),
+    ) in enumerate(
+        zip(
+            conversation_list,
+            input_ids,
+            targets,
+            ce_token_weights,
+            conversation_is_rail_reasoning,
+        )
+    ):  
         total_len = int(target.ne(tokenizer.pad_token_id).sum())
-
         rounds = conversation.split(conv.sep2)
         cur_len = 1
         target[:cur_len] = IGNORE_INDEX
@@ -234,16 +209,62 @@ def collate_fn(
 
             assistant_start = cur_len + instruction_len
             assistant_end = cur_len + round_len
-            if is_rail_reasoning and use_rail_reasoning_weighted_ce:
+            rail_group_positions = {}
+            if is_rail_reasoning:
                 assistant_text = parts[1]
-                assistant_token_count = assistant_end - assistant_start
-                assistant_weights = build_rail_reasoning_ce_weights(
+                rail_group_positions = locate_rail_reasoning_group_token_positions(
                     assistant_text,
+                    input_id.tolist(),
                     tokenizer,
-                    assistant_token_count,
+                    search_start=assistant_start,
+                    search_end=assistant_end,
                 )
-                token_weight[assistant_start:assistant_end] = assistant_weights
-            
+                for group_name, positions in rail_group_positions.items():
+                    if any(
+                        position < assistant_start or position >= assistant_end
+                        for position in positions
+                    ):
+                        raise ValueError(
+                            "Rail reasoning group is outside the supervised "
+                            "assistant span: "
+                            f"group={group_name!r} positions={positions} "
+                            f"assistant_span=[{assistant_start}, {assistant_end})"
+                        )
+                    position_tensor = torch.tensor(positions, dtype=torch.long)
+                    if target[position_tensor].eq(IGNORE_INDEX).any():
+                        raise ValueError(
+                            "Rail reasoning group overlaps ignored labels: "
+                            f"group={group_name!r} positions={positions}"
+                        )
+
+                if use_rail_reasoning_weighted_ce:
+                    for group_name, group_weight in (
+                        RAIL_REASONING_DECISION_GROUP_WEIGHTS.items()
+                    ):
+                        if group_weight <= 1.0:
+                            continue
+                        positions = rail_group_positions.get(group_name, [])
+                        if positions:
+                            token_weight[positions] = group_weight
+
+                switch_positions = rail_group_positions.get("switch", [])
+                if switch_positions:
+                    rail_switch_token_masks[
+                        conversation_idx, switch_positions
+                    ] = True
+
+                right_state_positions = rail_group_positions.get("right_state", [])
+                if right_state_positions:
+                    rail_right_state_token_masks[
+                        conversation_idx, right_state_positions
+                    ] = True
+
+                open_side_positions = rail_group_positions.get("open_side", [])
+                if open_side_positions:
+                    reasoning_decision_token_masks[
+                        conversation_idx, open_side_positions
+                    ] = True
+
             if use_seg_token_weighted_ce:
                 assistant_token_ids = input_id[assistant_start:assistant_end].tolist()
                 apply_token_sequence_weight(
@@ -278,7 +299,13 @@ def collate_fn(
             targets = targets[:, :truncate_len]
             attention_masks = attention_masks[:, :truncate_len]
             ce_token_weights = ce_token_weights[:, :truncate_len]
-
+            reasoning_decision_token_masks = reasoning_decision_token_masks[
+                :, :truncate_len
+            ]
+            rail_switch_token_masks = rail_switch_token_masks[:, :truncate_len]
+            rail_right_state_token_masks = rail_right_state_token_masks[
+                :, :truncate_len
+            ]
     return {
         "image_paths": image_path_list,
         "images": torch.stack(images_list, dim=0),
@@ -288,6 +315,9 @@ def collate_fn(
         "attention_masks": attention_masks,
         "ce_token_weights": ce_token_weights,
         "rail_ego_side_labels": torch.LongTensor(rail_ego_side_labels),
+        "reasoning_decision_token_masks": reasoning_decision_token_masks,
+        "rail_switch_token_masks": rail_switch_token_masks,
+        "rail_right_state_token_masks": rail_right_state_token_masks,
         "masks_list": masks_list,
         "label_list": label_list,
         "resize_list": resize_list,
@@ -327,6 +357,7 @@ class HybridDataset(torch.utils.data.Dataset):
         reason_seg_weight_map_dir_name="weight_maps",
         reason_seg_weight_map_weight=1.0,
         rail_counterfactual_flip_prob=0.0,
+
     ):
         self.exclude_val = exclude_val
         self.dataset = dataset
@@ -402,7 +433,6 @@ class HybridDataset(torch.utils.data.Dataset):
                         explanatory,
                         reason_seg_weight_map_dir_name,
                         reason_seg_weight_map_weight,
-                        0.0,
                     )
                 )
 
@@ -434,7 +464,6 @@ class HybridDataset(torch.utils.data.Dataset):
         inference = False
         return *data[0], inference
 
-
 def init_railsem_sem_seg_val(base_image_dir, split):
     railsem_data_root = os.path.join(base_image_dir, "RailSem19-SemSeg-LISA")
     with open(os.path.join(railsem_data_root, "config_v2.0.json")) as f:
@@ -454,7 +483,6 @@ def init_railsem_sem_seg_val(base_image_dir, split):
         for x in railsem_labels
     ]
     return railsem_classes, railsem_images, railsem_labels
-
 
 class ValDataset(torch.utils.data.Dataset):
     pixel_mean = torch.Tensor([123.675, 116.28, 103.53]).view(-1, 1, 1)
@@ -479,6 +507,7 @@ class ValDataset(torch.utils.data.Dataset):
             )
             self.images = images
             self.data_type = "reason_seg"
+
         elif len(splits) == 3 and splits[0] == "sem_seg":
             _, ds, split = splits
             if ds != "railsem":
@@ -541,6 +570,7 @@ class ValDataset(torch.utils.data.Dataset):
             image = cv2.imread(image_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             is_sentence = False
+
         elif self.data_type == "sem_seg":
             image_path = self.images[idx]
             label_path = self.labels[idx]
@@ -558,6 +588,7 @@ class ValDataset(torch.utils.data.Dataset):
                 return self.__getitem__((idx + 1) % len(self))
             sampled_sents = [self.sem_seg_classes[class_id] for class_id in sampled_class_ids]
             is_sentence = False
+
         else:
             image_path = self.images[idx]
             image = cv2.imread(image_path)
@@ -625,9 +656,11 @@ class ValDataset(torch.utils.data.Dataset):
                 )  # sometimes there are multiple binary map (corresponding to multiple segs)
                 m = m.astype(np.uint8)  # convert to np.uint8
                 masks.append(m)
+        
         elif self.data_type == "sem_seg":
             label = torch.from_numpy(label).long()
             masks = torch.stack([label == class_id for class_id in sampled_class_ids], dim=0)
+
         else:
             masks = [mask_json]
 
@@ -648,3 +681,4 @@ class ValDataset(torch.utils.data.Dataset):
             None,
             inference,
         )
+

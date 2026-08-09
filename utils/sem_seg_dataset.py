@@ -53,7 +53,7 @@ def init_railsem(base_image_dir):
     ]
     print("railsem: ", len(railsem_images))
     return railsem_classes, railsem_images, railsem_labels
-    
+
 
 def init_ade20k(base_image_dir):
     with open("utils/ade20k_classes.json", "r") as f:
@@ -261,12 +261,13 @@ class SemSegDataset(torch.utils.data.Dataset):
             label_path = labels[idx]
             label = Image.open(label_path)
             label = np.array(label)
-
+            
             if ds == "railsem":
-                # My version of RailSem uses indexed labels, extract first channel
+                # RailSem uses indexed labels, extract first channel
                 if label.ndim == 3:
                     label = label[:, :, 0]
-            
+                 # Treat the dataset's background label as ignore
+                #label[label == 2] = self.ignore_label
             if ds == "ade20k":
                 label[label == 0] = 255
                 label -= 1

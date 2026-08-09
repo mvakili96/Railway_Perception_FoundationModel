@@ -316,6 +316,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         label_list: List[torch.Tensor],
         resize_list: List[tuple],
         ce_token_weights: torch.FloatTensor = None,
+        rail_switch_token_masks: torch.BoolTensor = None,
+        rail_right_state_token_masks: torch.BoolTensor = None,
         rail_ego_side_labels: torch.LongTensor = None,
         reason_seg_weight_maps_list: List[torch.FloatTensor] = None,
         inference: bool = False,
@@ -447,6 +449,32 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         output = model_output.logits
         
         logits = model_output.logits
+        if rail_switch_token_masks is None:
+            rail_switch_token_masks = torch.zeros_like(labels, dtype=torch.bool)
+        elif rail_switch_token_masks.shape != labels.shape:
+            raise ValueError(
+                "rail_switch_token_masks must have the same shape as labels: "
+                f"{rail_switch_token_masks.shape} != {labels.shape}"
+            )
+        rail_switch_token_masks = rail_switch_token_masks.to(
+            device=labels.device,
+            dtype=torch.bool,
+        )
+        if rail_right_state_token_masks is None:
+            rail_right_state_token_masks = torch.zeros_like(
+                labels,
+                dtype=torch.bool,
+            )
+        elif rail_right_state_token_masks.shape != labels.shape:
+            raise ValueError(
+                "rail_right_state_token_masks must have the same shape as labels: "
+                f"{rail_right_state_token_masks.shape} != {labels.shape}"
+            )
+        rail_right_state_token_masks = rail_right_state_token_masks.to(
+            device=labels.device,
+            dtype=torch.bool,
+        )
+
         label_pad_len = logits.shape[1] - labels.shape[1]
         if label_pad_len > 0:
             pad_labels = torch.full(
@@ -456,6 +484,22 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 device=labels.device,
             )
             aligned_labels = torch.cat([pad_labels, labels], dim=1)
+            pad_switch_masks = torch.zeros(
+                (rail_switch_token_masks.shape[0], label_pad_len),
+                dtype=torch.bool,
+                device=rail_switch_token_masks.device,
+            )
+            aligned_switch_token_masks = torch.cat(
+                [pad_switch_masks, rail_switch_token_masks], dim=1
+            )
+            pad_right_state_masks = torch.zeros(
+                (rail_right_state_token_masks.shape[0], label_pad_len),
+                dtype=torch.bool,
+                device=rail_right_state_token_masks.device,
+            )
+            aligned_right_state_token_masks = torch.cat(
+                [pad_right_state_masks, rail_right_state_token_masks], dim=1
+            )
             if ce_token_weights is None:
                 pad_weights = torch.ones(
                     (labels.shape[0], label_pad_len),
@@ -474,6 +518,8 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 aligned_token_weights = torch.cat([pad_weights, ce_token_weights], dim=1)
         else:
             aligned_labels = labels
+            aligned_switch_token_masks = rail_switch_token_masks
+            aligned_right_state_token_masks = rail_right_state_token_masks
             if ce_token_weights is None:
                 aligned_token_weights = torch.ones_like(labels, dtype=logits.dtype)
             else:
@@ -482,6 +528,10 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = aligned_labels[..., 1:].contiguous()
         shift_token_weights = aligned_token_weights[..., 1:].to(shift_logits.dtype).contiguous()
+        shift_switch_token_masks = aligned_switch_token_masks[..., 1:].contiguous()
+        shift_right_state_token_masks = (
+            aligned_right_state_token_masks[..., 1:].contiguous()
+        )
 
         token_ce = F.cross_entropy(
             shift_logits.view(-1, shift_logits.size(-1)),
@@ -492,10 +542,51 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         flat_labels = shift_labels.view(-1)
         flat_token_weights = shift_token_weights.view(-1)
         valid_mask = flat_labels.ne(IGNORE_INDEX)
+        flat_switch_token_masks = shift_switch_token_masks.view(-1)
+        valid_switch_mask = valid_mask & flat_switch_token_masks
+        flat_right_state_token_masks = shift_right_state_token_masks.view(-1)
+        valid_right_state_mask = valid_mask & flat_right_state_token_masks
         if valid_mask.any():
             ce_loss = (token_ce[valid_mask] * flat_token_weights[valid_mask]).sum() / flat_token_weights[valid_mask].sum().clamp_min(1.0)
         else:
             ce_loss = token_ce.new_tensor(0.0)
+
+        flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+        switch_token_count = valid_switch_mask.sum()
+        if valid_switch_mask.any():
+            switch_ce = token_ce[valid_switch_mask].mean()
+            switch_predictions = flat_shift_logits[
+                valid_switch_mask
+            ].argmax(dim=-1)
+            switch_targets = flat_labels[valid_switch_mask]
+            switch_correct_count = switch_predictions.eq(switch_targets).sum()
+            switch_accuracy = (
+                switch_correct_count.to(switch_ce.dtype)
+                / switch_token_count.to(switch_ce.dtype)
+            )
+        else:
+            switch_ce = token_ce.new_tensor(0.0)
+            switch_correct_count = switch_token_count.new_zeros(())
+            switch_accuracy = token_ce.new_tensor(0.0)
+
+        right_state_token_count = valid_right_state_mask.sum()
+        if valid_right_state_mask.any():
+            right_state_ce = token_ce[valid_right_state_mask].mean()
+            right_state_predictions = flat_shift_logits[
+                valid_right_state_mask
+            ].argmax(dim=-1)
+            right_state_targets = flat_labels[valid_right_state_mask]
+            right_state_correct_count = right_state_predictions.eq(
+                right_state_targets
+            ).sum()
+            right_state_accuracy = (
+                right_state_correct_count.to(right_state_ce.dtype)
+                / right_state_token_count.to(right_state_ce.dtype)
+            )
+        else:
+            right_state_ce = token_ce.new_tensor(0.0)
+            right_state_correct_count = right_state_token_count.new_zeros(())
+            right_state_accuracy = token_ce.new_tensor(0.0)
 
         ce_loss = ce_loss * self.ce_loss_weight
         rail_ego_side_loss = ce_loss.new_tensor(0.0)
@@ -569,6 +660,14 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         return {
             "loss": loss,
             "ce_loss": ce_loss,
+            "switch_ce": switch_ce,
+            "switch_token_count": switch_token_count,
+            "switch_correct_count": switch_correct_count,
+            "switch_accuracy": switch_accuracy,
+            "right_state_ce": right_state_ce,
+            "right_state_token_count": right_state_token_count,
+            "right_state_correct_count": right_state_correct_count,
+            "right_state_accuracy": right_state_accuracy,
             "rail_ego_side_loss": rail_ego_side_loss,
             "mask_bce_loss": mask_bce_loss,
             "mask_dice_loss": mask_dice_loss,
@@ -658,3 +757,4 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 pred_masks.append(pred_mask[:, 0])
 
         return output_ids, pred_masks
+

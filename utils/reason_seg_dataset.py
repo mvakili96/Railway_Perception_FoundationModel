@@ -2,7 +2,6 @@ import glob
 import json
 import os
 import random
-import re
 
 import cv2
 import numpy as np
@@ -15,20 +14,12 @@ from model.llava import conversation as conversation_lib
 from model.segment_anything.utils.transforms import ResizeLongestSide
 
 from .data_processing import get_mask_from_json
-from .rail_augmentation import (flip_rail_reasoning_explanation,
-                                horizontal_flip, swap_left_right)
 from .utils import (ANSWER_LIST, DEFAULT_IMAGE_TOKEN,
                     EXPLANATORY_QUESTION_LIST, LONG_QUESTION_LIST,
                     SHORT_QUESTION_LIST)
-
-
-RAIL_REASONING_DECISION_PATTERN = re.compile(
-    r"This is a (?P<switch>turnout|merge) switch\. "
-    r"The right blade is (?P<right_state>open|closed) and the left blade is (?P<left_state>open|closed)\. "
-    r"The open (?P<open_side>right|left) blade and the closed (?P<closed_side>right|left) blade together create a continuous rail "
-    r"connection toward the (?P<ego_path>right-hand|left-hand) path and break continuity with the (?P<other_path>right-hand|left-hand) path\. "
-    r"Therefore, the ego-path follows the (?P<final_path>right-hand|left-hand) path\."
-)
+from .rail_augmentation import (flip_rail_reasoning_explanation,
+                                horizontal_flip, swap_left_right)
+from .rail_reasoning import RAIL_REASONING_DECISION_PATTERN
 
 RAIL_EGO_SIDE_TO_LABEL = {"left-hand": 0, "right-hand": 1}
 RAIL_EGO_SIDE_IGNORE_INDEX = -100
@@ -42,7 +33,6 @@ def parse_rail_ego_side_label(text):
         match.group("final_path"),
         RAIL_EGO_SIDE_IGNORE_INDEX,
     )
-
 
 class ReasonSegDataset(torch.utils.data.Dataset):
     pixel_mean = torch.Tensor([123.675, 116.28, 103.53]).view(-1, 1, 1)
@@ -63,12 +53,11 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         reason_seg_data="ReasonSeg|train",
         explanatory=0.1,
         weight_map_dir_name="weight_maps",
-        weight_map_weight=1.0,
+        weight_map_weight=1.0,    
         counterfactual_flip_prob=0.0,
-    ):
+        ):
         if not 0.0 <= counterfactual_flip_prob <= 1.0:
             raise ValueError("counterfactual_flip_prob must be between 0 and 1")
-
         self.exclude_val = exclude_val
         self.reason_seg_data = reason_seg_data
         self.samples_per_epoch = samples_per_epoch
@@ -118,6 +107,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             self.img_to_explanation = {}
             with open(explanation_path) as f:
                 items = json.load(f)
+            unmatched_explanations = []
             for item in items:
                 img_name = item["image"]
                 self.img_to_explanation[img_name] = {
@@ -127,12 +117,25 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                 ego_side_label = parse_rail_ego_side_label(item["outputs"])
                 if ego_side_label != RAIL_EGO_SIDE_IGNORE_INDEX:
                     self.img_to_ego_side_label[img_name] = ego_side_label
-
+                else:
+                    unmatched_explanations.append(img_name)
             print("len(self.img_to_explanation): ", len(self.img_to_explanation))
             print("len(self.img_to_ego_side_label): ", len(self.img_to_ego_side_label))
+            print(
+                "rail ego-side explanation matches: ",
+                len(self.img_to_ego_side_label),
+                "/",
+                len(items),
+            )
+            if unmatched_explanations:
+                print(
+                    "unmatched rail ego-side explanations: ",
+                    unmatched_explanations[:10],
+                )
+
         else:
             self.img_to_explanation = {}
-
+        
     def __len__(self):
         return self.samples_per_epoch
 
@@ -199,7 +202,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")[
             "pixel_values"
         ][0]
-
+    
         if len(sents) >= self.num_classes_per_sample:
             sampled_inds = np.random.choice(
                 list(range(len(sents))), size=self.num_classes_per_sample, replace=False
@@ -239,7 +242,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                 elif choice == 1:  # [SEG] token + text answer
                     image_name = image_path.split("/")[-1]
                     answer = self.img_to_explanation[image_name]["outputs"]
-                    answer = "{} {}".format(answer, random.choice(self.answer_list))
+                    answer = "{} {}".format(random.choice(self.answer_list),answer)
                     questions[-1] = (
                         DEFAULT_IMAGE_TOKEN
                         + "\n"
@@ -326,6 +329,7 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                 flush=True,
             )
             self.counterfactual_flip_logged = True
+
 
         return (
             image_path,
