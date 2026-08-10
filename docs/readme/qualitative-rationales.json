@@ -1,0 +1,80 @@
+[
+  {
+    "panel": "a",
+    "image": "qualitative/example-002.jpg",
+    "switch": "turnout",
+    "right_state": "closed",
+    "left_state": "open",
+    "open_side": "left",
+    "closed_side": "right",
+    "ego_path": "left-hand",
+    "other_path": "right-hand",
+    "final_path": "left-hand",
+    "response": "The segmentation result is [SEG]. This is a turnout switch. The right blade is closed and the left blade is open. The open left blade and the closed right blade together create a continuous rail connection toward the left-hand path and break continuity with the right-hand path. Therefore, the ego-path follows the left-hand path."
+  },
+  {
+    "panel": "b",
+    "image": "qualitative/example-003.jpg",
+    "switch": "turnout",
+    "right_state": "open",
+    "left_state": "closed",
+    "open_side": "right",
+    "closed_side": "left",
+    "ego_path": "right-hand",
+    "other_path": "left-hand",
+    "final_path": "right-hand",
+    "response": "The segmentation result is [SEG]. This is a turnout switch. The right blade is open and the left blade is closed. The open right blade and the closed left blade together create a continuous rail connection toward the right-hand path and break continuity with the left-hand path. Therefore, the ego-path follows the right-hand path."
+  },
+  {
+    "panel": "c",
+    "image": "qualitative/example-000.jpg",
+    "switch": "turnout",
+    "right_state": "open",
+    "left_state": "closed",
+    "open_side": "right",
+    "closed_side": "left",
+    "ego_path": "right-hand",
+    "other_path": "left-hand",
+    "final_path": "right-hand",
+    "response": "The segmentation result is [SEG]. This is a turnout switch. The right blade is open and the left blade is closed. The open right blade and the closed left blade together create a continuous rail connection toward the right-hand path and break continuity with the left-hand path. Therefore, the ego-path follows the right-hand path."
+  },
+  {
+    "panel": "d",
+    "image": "qualitative/example-001.jpg",
+    "switch": "turnout",
+    "right_state": "open",
+    "left_state": "closed",
+    "open_side": "right",
+    "closed_side": "left",
+    "ego_path": "right-hand",
+    "other_path": "left-hand",
+    "final_path": "right-hand",
+    "response": "The segmentation result is [SEG]. This is a turnout switch. The right blade is open and the left blade is closed. The open right blade and the closed left blade together create a continuous rail connection toward the right-hand path and break continuity with the left-hand path. Therefore, the ego-path follows the right-hand path."
+  },
+  {
+    "panel": "e",
+    "image": "qualitative/example-005.jpg",
+    "switch": "merge",
+    "right_state": "closed",
+    "left_state": "open",
+    "open_side": "left",
+    "closed_side": "right",
+    "ego_path": "left-hand",
+    "other_path": "right-hand",
+    "final_path": "left-hand",
+    "response": "The segmentation result is [SEG]. This is a merge switch. The right blade is closed and the left blade is open. The open left blade and the closed right blade together create a continuous rail connection toward the left-hand path and break continuity with the right-hand path. Therefore, the ego-path follows the left-hand path."
+  },
+  {
+    "panel": "f",
+    "image": "qualitative/example-004.jpg",
+    "switch": "merge",
+    "right_state": "closed",
+    "left_state": "open",
+    "open_side": "left",
+    "closed_side": "right",
+    "ego_path": "left-hand",
+    "other_path": "right-hand",
+    "final_path": "left-hand",
+    "response": "The segmentation result is [SEG]. This is a merge switch. The right blade is closed and the left blade is open. The open left blade and the closed right blade together create a continuous rail connection toward the left-hand path and break continuity with the right-hand path. Therefore, the ego-path follows the left-hand path."
+  }
+]

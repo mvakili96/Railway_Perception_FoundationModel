@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1800" height="1020" viewBox="0 0 1800 1020" role="img" aria-labelledby="title desc">
+  <title id="title">Qualitative railway ego-route predictions with canonical rationales</title>
+  <desc id="desc">Six railway images with predicted masks in red and rationale text following the repository's fixed rail-reasoning template.</desc>
+  <defs>
+    <style>
+      .card { fill: #ffffff; stroke: #b7c4cd; stroke-width: 2; }
+      .panel { font-family: Inter, "Segoe UI", Arial, sans-serif; font-size: 24px; font-weight: 700; fill: #173142; }
+      .text { font-family: Georgia, "Times New Roman", serif; font-size: 21px; fill: #17242d; }
+      .mask { font-family: Georgia, "Times New Roman", serif; font-size: 21px; font-weight: 700; fill: #173142; }
+    </style>
+    <clipPath id="clip-a"><rect x="27" y="27" width="292" height="292" rx="4"/></clipPath>
+    <clipPath id="clip-b"><rect x="927" y="27" width="292" height="292" rx="4"/></clipPath>
+    <clipPath id="clip-c"><rect x="27" y="357" width="292" height="292" rx="4"/></clipPath>
+    <clipPath id="clip-d"><rect x="927" y="357" width="292" height="292" rx="4"/></clipPath>
+    <clipPath id="clip-e"><rect x="27" y="687" width="292" height="292" rx="4"/></clipPath>
+    <clipPath id="clip-f"><rect x="927" y="687" width="292" height="292" rx="4"/></clipPath>
+  </defs>
+
+  <rect width="1800" height="1020" fill="#f4f7f9"/>
+
+  <!-- (a) turnout, left-hand ego-route -->
+  <rect x="15" y="15" width="870" height="316" rx="10" class="card"/>
+  <image x="27" y="27" width="292" height="292" xlink:href="qualitative/example-002.jpg" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip-a)"/>
+  <text x="341" y="58" class="panel">(a)</text>
+  <text x="389" y="58" class="mask">The segmentation result is [SEG].</text>
+  <text x="341" y="93" class="text">
+    <tspan x="341" dy="0">This is a turnout switch. The right blade is closed</tspan>
+    <tspan x="341" dy="29">and the left blade is open. The open left blade and</tspan>
+    <tspan x="341" dy="29">the closed right blade together create a continuous</tspan>
+    <tspan x="341" dy="29">rail connection toward the left-hand path and break</tspan>
+    <tspan x="341" dy="29">continuity with the right-hand path. Therefore, the</tspan>
+    <tspan x="341" dy="29">ego-path follows the left-hand path.</tspan>
+  </text>
+
+  <!-- (b) turnout, right-hand ego-route -->
+  <rect x="915" y="15" width="870" height="316" rx="10" class="card"/>
+  <image x="927" y="27" width="292" height="292" xlink:href="qualitative/example-003.jpg" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip-b)"/>
+  <text x="1241" y="58" class="panel">(b)</text>
+  <text x="1289" y="58" class="mask">The segmentation result is [SEG].</text>
+  <text x="1241" y="93" class="text">
+    <tspan x="1241" dy="0">This is a turnout switch. The right blade is open</tspan>
+    <tspan x="1241" dy="29">and the left blade is closed. The open right blade</tspan>
+    <tspan x="1241" dy="29">and the closed left blade together create a continuous</tspan>
+    <tspan x="1241" dy="29">rail connection toward the right-hand path and break</tspan>
+    <tspan x="1241" dy="29">continuity with the left-hand path. Therefore, the</tspan>
+    <tspan x="1241" dy="29">ego-path follows the right-hand path.</tspan>
+  </text>
+
+  <!-- (c) turnout, right-hand ego-route -->
+  <rect x="15" y="345" width="870" height="316" rx="10" class="card"/>
+  <image x="27" y="357" width="292" height="292" xlink:href="qualitative/example-000.jpg" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip-c)"/>
+  <text x="341" y="388" class="panel">(c)</text>
+  <text x="389" y="388" class="mask">The segmentation result is [SEG].</text>
+  <text x="341" y="423" class="text">
+    <tspan x="341" dy="0">This is a turnout switch. The right blade is open</tspan>
+    <tspan x="341" dy="29">and the left blade is closed. The open right blade</tspan>
+    <tspan x="341" dy="29">and the closed left blade together create a continuous</tspan>
+    <tspan x="341" dy="29">rail connection toward the right-hand path and break</tspan>
+    <tspan x="341" dy="29">continuity with the left-hand path. Therefore, the</tspan>
+    <tspan x="341" dy="29">ego-path follows the right-hand path.</tspan>
+  </text>
+
+  <!-- (d) turnout, right-hand ego-route -->
+  <rect x="915" y="345" width="870" height="316" rx="10" class="card"/>
+  <image x="927" y="357" width="292" height="292" xlink:href="qualitative/example-001.jpg" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip-d)"/>
+  <text x="1241" y="388" class="panel">(d)</text>
+  <text x="1289" y="388" class="mask">The segmentation result is [SEG].</text>
+  <text x="1241" y="423" class="text">
+    <tspan x="1241" dy="0">This is a turnout switch. The right blade is open</tspan>
+    <tspan x="1241" dy="29">and the left blade is closed. The open right blade</tspan>
+    <tspan x="1241" dy="29">and the closed left blade together create a continuous</tspan>
+    <tspan x="1241" dy="29">rail connection toward the right-hand path and break</tspan>
+    <tspan x="1241" dy="29">continuity with the left-hand path. Therefore, the</tspan>
+    <tspan x="1241" dy="29">ego-path follows the right-hand path.</tspan>
+  </text>
+
+  <!-- (e) merge, left-hand ego-route -->
+  <rect x="15" y="675" width="870" height="316" rx="10" class="card"/>
+  <image x="27" y="687" width="292" height="292" xlink:href="qualitative/example-005.jpg" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip-e)"/>
+  <text x="341" y="718" class="panel">(e)</text>
+  <text x="389" y="718" class="mask">The segmentation result is [SEG].</text>
+  <text x="341" y="753" class="text">
+    <tspan x="341" dy="0">This is a merge switch. The right blade is closed</tspan>
+    <tspan x="341" dy="29">and the left blade is open. The open left blade and</tspan>
+    <tspan x="341" dy="29">the closed right blade together create a continuous</tspan>
+    <tspan x="341" dy="29">rail connection toward the left-hand path and break</tspan>
+    <tspan x="341" dy="29">continuity with the right-hand path. Therefore, the</tspan>
+    <tspan x="341" dy="29">ego-path follows the left-hand path.</tspan>
+  </text>
+
+  <!-- (f) merge, left-hand ego-route -->
+  <rect x="915" y="675" width="870" height="316" rx="10" class="card"/>
+  <image x="927" y="687" width="292" height="292" xlink:href="qualitative/example-004.jpg" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip-f)"/>
+  <text x="1241" y="718" class="panel">(f)</text>
+  <text x="1289" y="718" class="mask">The segmentation result is [SEG].</text>
+  <text x="1241" y="753" class="text">
+    <tspan x="1241" dy="0">This is a merge switch. The right blade is closed</tspan>
+    <tspan x="1241" dy="29">and the left blade is open. The open left blade and</tspan>
+    <tspan x="1241" dy="29">the closed right blade together create a continuous</tspan>
+    <tspan x="1241" dy="29">rail connection toward the left-hand path and break</tspan>
+    <tspan x="1241" dy="29">continuity with the right-hand path. Therefore, the</tspan>
+    <tspan x="1241" dy="29">ego-path follows the left-hand path.</tspan>
+  </text>
+</svg>
