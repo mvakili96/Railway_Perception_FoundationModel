@@ -95,6 +95,40 @@ The included two-node job is the current reference configuration:
 - Selective CLIP/SAM tuning, weighted losses, and auxiliary ego-side prediction ([`train_ds.py`](train_ds.py), [`model/LISA.py`](model/LISA.py)).
 - Merged Hugging Face checkpoint support and folder-based inference ([`merge_lora_weights_and_save_hf_model.py`](merge_lora_weights_and_save_hf_model.py), [`chat_batch.py`](chat_batch.py)).
 
+## Reproducibility Status
+
+| Artifact | Status | Current availability |
+|---|---|---|
+| Source code and README assets | **Available** | Included in this repository. |
+| Unit tests | **Available** | Reasoning-template parsing and counterfactual augmentation tests are under [`tests/`](tests/); full GPU/model tests are not included. |
+| HPC workflows | **Available** | Two-node training, checkpoint merging, and batch-demo Slurm scripts are included as cluster-specific examples. |
+| Runtime container | **External** | Docker Hub image [`mvakili96/lisa:v2`](https://hub.docker.com/r/mvakili96/lisa); its immutable digest is not yet recorded here. |
+| LISA/LLaVA base checkpoint | **External** | Must be obtained and prepared separately. |
+| SAM ViT-H checkpoint | **External** | Must be downloaded from the [SAM release](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth). |
+| Railway training data and labels | **Planned** | Not yet released. |
+| Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
+| Evaluation and bootstrap scripts | **Planned** | Not yet released. |
+| Route-logic audit labels and evaluator | **Planned** | Not yet released. |
+| Exact environment lock | **Planned** | [`requirements.txt`](requirements.txt) is partial; a pinned environment and container digest are still needed. |
+
+The Slurm files contain paths from the original cluster and must be edited for a reader's storage, network, dataset, and checkpoint locations.
+
+### What you can reproduce now
+
+- Inspect and test the rail-specific reasoning and augmentation logic.
+- Pull the project container and run the supplied workflows with compatible user-provided data and checkpoints.
+- Train, merge, or run folder inference after replacing the example cluster paths.
+
+The reported result tables cannot yet be reproduced end to end from public artifacts alone.
+
+### Needed for full result reproduction
+
+- [ ] Railway training/evaluation data, labels, and preparation scripts.
+- [ ] Final rail-finetuned checkpoint and model card.
+- [ ] Evaluation, bootstrap, and route-audit code and metadata.
+- [ ] Pinned environment specification and immutable container digest.
+- [ ] Portable configuration examples without site-specific paths.
+
 ## Dataset Layout
 
 ### Data composition and preprocessing
@@ -132,7 +166,6 @@ Counts are before stochastic counterfactual flipping.
 │   │   ├── config_v2.0.json
 │   │   ├── training
 ```
-Please note that we are still actively improving this method and expect to introduce newer versions of both the model and the dataset. Because the dataset may be expanded, refined, or restructured as the project evolves, we have not released the full data here yet and it will remain unavailable until further notice.
 
 ## HPC Slurm Workflow
 This repo includes cluster scripts for Apptainer-based training and merging.
@@ -146,19 +179,17 @@ To train LISA-7B or 13B, you need to follow the [instruction](https://github.com
 Download SAM ViT-H pre-trained weights from the [link](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth).
 
 ### Container Setup
-The Slurm scripts expect an Apptainer/Singularity image file (`.sif`) referenced by the `IMG` variable inside the scripts. The container used for this project is available from DockerHub:
-[https://hub.docker.com/repositories/mvakili96](https://hub.docker.com/repositories/mvakili96)
+The Slurm scripts expect an Apptainer/Singularity image file (`.sif`) referenced by their `IMG` variables. Pull the public container with:
 
-Pull or build the corresponding container image, convert it to a `.sif` if needed for your cluster, and update the `IMG` path in the Slurm scripts before launching jobs.
-
-
-### Fine-tune
-Edit container/dataset/checkpoint paths in `fine_tune_LISA.sbatch`, then run:
 ```bash
-sbatch fine_tune_LISA.sbatch
+apptainer pull LISA.sif docker://mvakili96/lisa:v2
 ```
 
-If you prefer multi-node, you can run:
+Update each script's `IMG` path before launching it. The `v2` tag is available but mutable; an immutable digest is still planned.
+
+### Fine-tune
+The repository currently provides the two-node reference job. Edit its container, dataset, checkpoint, code, and network settings, then run:
+
 ```bash
 sbatch fine_tune_LISA_2nodes.sbatch
 ```
@@ -168,16 +199,6 @@ After the fine-tuning is done, in order to get the full model weight, merge the 
 ```bash
 sbatch merge_LISA.sbatch
 ```
-
-### Finetune Script Contrast: `fine_tune_LISA.sbatch` vs `fine_tune_LISA_2nodes.sbatch`
-| Item | `fine_tune_LISA.sbatch` | `fine_tune_LISA_2nodes.sbatch` |
-|---|---|---|
-| Purpose | Single-node fine-tuning | Multi-node distributed fine-tuning |
-| SLURM scale | `--gres=gpu:1` | Typically `--nodes=2` with multiple GPUs per node |
-| Launch style | `deepspeed --num_gpus=$NUM_GPUS ...` | Typically `deepspeed --num_nodes ... --num_gpus ...` (or equivalent multi-node launcher) |
-| Networking | Localhost-style env (`MASTER_ADDR=127.0.0.1`) | Cross-node rendezvous (`MASTER_ADDR` as first node hostname/IP) |
-| Recommended use | Fast debug / small experiments | Paper-scale training (e.g., 2-node, multi-GPU setup) |
-
 
 ## Citation
 If this repository is useful for your work, please cite both this paper and LISA.
