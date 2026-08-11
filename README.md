@@ -138,6 +138,25 @@ The `v2` tag is mutable. A pinned image digest and complete environment manifest
 
 Before using the Slurm scripts, replace their partition, QoS, account, log path, `IMG`, `PROC_DATA`, `PROC_CKPT`, and `PROC_CODE` values. Also replace the hard-coded `ens3f0np0` NCCL/Gloo interface and review every bind mount, cache, dataset, checkpoint, and output path for the target cluster.
 
+## Inference
+
+[`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings and the `IMG`, `PROC_CKPT`, `PROC_CODE`, model, input, and output paths.
+
+The merged model must include its exported `vision_tower/`. Point `--version` to the model directory and `--vision-tower` to that subdirectory; the current loader requires the local vision-tower path to contain `clip`.
+
+Set `--image_path` to either:
+
+- one `.jpg`, `.jpeg`, or `.png` file for single-image inference; or
+- a directory to process its top-level images sequentially with the same prompt.
+
+`--mask_save_path` receives thresholded mask JPEGs, `--vis_save_path` receives red-overlay JPEGs, and the generated rationale is printed to the Slurm log. After editing the placeholders, run:
+
+```bash
+sbatch demo_LISA.sbatch
+```
+
+The script's `bf16`, 1024-token context, and reasoning prompt are the current reference inference settings. The checkpoint ID currently shown in the script is a site-specific placeholder, not a released model.
+
 ## Reproducibility Status
 
 | Artifact | Status | Current availability |
