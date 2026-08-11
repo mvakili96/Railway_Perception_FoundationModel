@@ -95,6 +95,49 @@ The included two-node job is the current reference configuration:
 - Selective CLIP/SAM tuning, weighted losses, and auxiliary ego-side prediction ([`train_ds.py`](train_ds.py), [`model/LISA.py`](model/LISA.py)).
 - Merged Hugging Face checkpoint support and folder-based inference ([`merge_lora_weights_and_save_hf_model.py`](merge_lora_weights_and_save_hf_model.py), [`chat_batch.py`](chat_batch.py)).
 
+## Environment Setup
+
+The supported environment is the public Linux/AMD64 container [`mvakili96/lisa:v2`](https://hub.docker.com/r/mvakili96/lisa), based on PyTorch 2.2.2, CUDA 12.1, and cuDNN 8. The current reference job uses bfloat16 on eight NVIDIA L40 GPUs across two nodes. An NVIDIA driver compatible with the container's CUDA runtime and Apptainer/Singularity with GPU support are required; Slurm is needed only for the supplied cluster workflows.
+
+[`requirements.txt`](requirements.txt) is inherited from the original LISA repository and is not the installation path for this version.
+
+### Clone and pull the container
+
+```bash
+git clone https://github.com/mvakili96/Railway_Perception_FoundationModel.git
+cd Railway_Perception_FoundationModel
+apptainer pull LISA.sif docker://mvakili96/lisa:v2
+```
+
+Verify that the container can see the GPU:
+
+```bash
+apptainer exec --nv LISA.sif \
+  python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+```
+
+To work interactively with the repository mounted at `/workspace/project`:
+
+```bash
+apptainer shell --nv \
+  --bind "$PWD:/workspace/project" \
+  LISA.sif
+```
+
+The `v2` tag is mutable. A pinned image digest and complete environment manifest are still planned for exact reproduction.
+
+### Model prerequisites
+
+| Workflow | Required checkpoint |
+|---|---|
+| Current finetuning (`--hf_merged_model`) | A complete LISA-compatible Hugging Face model directory containing model, tokenizer, configuration, and its saved `vision_tower/`. The local `LISA-7B-v1` path in the reference job is not included in this repository. |
+| Initialization from backbones | A prepared LLaVA checkpoint following the [upstream LISA instructions](https://github.com/JIA-Lab-research/LISA#pre-trained-weights) and the [LLaVA model-preparation guidance](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md), plus the [SAM ViT-H checkpoint](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth) supplied through `--vision_pretrained`. |
+| Inference | A merged rail-finetuned model directory with its `vision_tower/`; the final project checkpoint is not yet released. |
+
+### Cluster-specific settings
+
+Before using the Slurm scripts, replace their partition, QoS, account, log path, `IMG`, `PROC_DATA`, `PROC_CKPT`, and `PROC_CODE` values. Also replace the hard-coded `ens3f0np0` NCCL/Gloo interface and review every bind mount, cache, dataset, checkpoint, and output path for the target cluster.
+
 ## Reproducibility Status
 
 | Artifact | Status | Current availability |
@@ -109,7 +152,7 @@ The included two-node job is the current reference configuration:
 | Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
 | Evaluation and bootstrap scripts | **Planned** | Not yet released. |
 | Route-logic audit labels and evaluator | **Planned** | Not yet released. |
-| Exact environment lock | **Planned** | [`requirements.txt`](requirements.txt) is partial; a pinned environment and container digest are still needed. |
+| Exact environment lock | **Planned** | The container is available, but its digest and a complete environment manifest are not yet recorded. |
 
 The Slurm files contain paths from the original cluster and must be edited for a reader's storage, network, dataset, and checkpoint locations.
 
@@ -168,24 +211,7 @@ Counts are before stochastic counterfactual flipping.
 ```
 
 ## HPC Slurm Workflow
-This repo includes cluster scripts for Apptainer-based training and merging.
-
-### Pre-trained weights
-
-#### LLaVA
-To train LISA-7B or 13B, you need to follow the [instruction](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md) to merge the LLaVA delta weights. Typically, LISA authors use the final weights `LLaVA-Lightning-7B-v1-1` and `LLaVA-13B-v1-1` merged from `liuhaotian/LLaVA-Lightning-7B-delta-v1-1` and `liuhaotian/LLaVA-13b-delta-v1-1`, respectively. For Llama2, you can directly use the LLaVA full weights `liuhaotian/llava-llama-2-13b-chat-lightning-preview`.
-
-#### SAM ViT-H weights
-Download SAM ViT-H pre-trained weights from the [link](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth).
-
-### Container Setup
-The Slurm scripts expect an Apptainer/Singularity image file (`.sif`) referenced by their `IMG` variables. Pull the public container with:
-
-```bash
-apptainer pull LISA.sif docker://mvakili96/lisa:v2
-```
-
-Update each script's `IMG` path before launching it. The `v2` tag is available but mutable; an immutable digest is still planned.
+This repository includes cluster-specific Apptainer examples for training and merging. Complete the [environment setup](#environment-setup), provide the required checkpoints, and replace the site-specific settings before submission.
 
 ### Fine-tune
 The repository currently provides the two-node reference job. Edit its container, dataset, checkpoint, code, and network settings, then run:
