@@ -276,6 +276,56 @@ sbatch merge_LISA.sbatch
 
 Keep the entire output directory together because the root weights do not duplicate the saved CLIP tower. When moving it, pass its local `vision_tower/` explicitly as documented under [Inference](#inference).
 
+## Repository Map and Validation
+
+The map lists the maintained entry points and rail-specific code; vendored LLaVA and SAM internals are grouped.
+
+```text
+.
+├── train_ds.py                              # training, validation, and monitoring
+├── chat_batch.py                            # single-image and folder inference
+├── merge_lora_weights_and_save_hf_model.py  # merged checkpoint export
+├── fine_tune_LISA_2nodes.sbatch             # two-node training launcher
+├── demo_LISA.sbatch                         # one-GPU inference launcher
+├── merge_LISA.sbatch                        # CPU checkpoint conversion/export
+├── model/
+│   ├── LISA.py                              # adapted model and losses
+│   ├── llava/                               # LLaVA/CLIP stack
+│   └── segment_anything/                    # SAM stack
+├── utils/
+│   ├── dataset.py                           # sampling, collation, and validation
+│   ├── sem_seg_dataset.py                   # railway semantic loader
+│   ├── reason_seg_dataset.py                # railway reasoning loader
+│   ├── rail_reasoning.py                    # rationale parsing and token weights
+│   └── rail_augmentation.py                 # left/right counterfactual transforms
+├── tests/                                   # CPU logic tests
+└── docs/readme/                             # README figures and sources
+```
+
+### Validation commands
+
+Run these from the repository root inside the supported container:
+
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q chat_batch.py train_ds.py \
+  merge_lora_weights_and_save_hf_model.py model utils tests
+bash -n demo_LISA.sbatch fine_tune_LISA_2nodes.sbatch merge_LISA.sbatch
+git diff --check
+```
+
+The 11 CPU unit tests check structured-rationale token alignment and left/right text, image, and mask transforms. They do not load a model or test datasets, training, checkpoint conversion, segmentation quality, or inference. Full model checks require the container, an NVIDIA GPU, and external checkpoints; end-to-end training/evaluation also requires the railway data.
+
+### Troubleshooting
+
+| Symptom | Check and fix |
+|---|---|
+| Missing configuration, tokenizer, or weights | `--version` must point to the root of a complete merged export—not `ckpt_model/`, `fp32_model/`, or one weight file. Check the path inside the container; the root needs its configuration, tokenizer, model weight file(s), and sibling `vision_tower/`. |
+| `Unknown vision tower` or CLIP load failure | Pass the exported tower through `--vision-tower`. Its directory needs CLIP configuration, weights, and processor configuration, and the current loader requires the full path string to contain `clip`. This explicit argument also overrides a stale absolute path saved during export. |
+| CUDA out of memory | Inference already processes folder images sequentially; use BF16, free competing GPU jobs, or use a larger GPU. For training, lower `--batch_size` and raise `--grad_accumulation_steps` if the effective batch must stay fixed. The available 4/8-bit modes are not validated for the final checkpoint. |
+| Distributed startup hangs or times out | Replace `ens3f0np0` consistently in `NCCL_SOCKET_IFNAME`, `GLOO_SOCKET_IFNAME`, and the master-address lookup with an IPv4 interface reachable from every node. Verify the printed address, port, world size, ranks, and one-GPU-per-task mapping. |
+| Rationale appears but no mask is saved | A mask is decoded only when the model generates `[SEG]`. Inspect `text_output`, use the documented prompt and `llava_v1` template, and verify that the merged model, tokenizer, and vision tower belong to the same export. Do not add `[SEG]` to the user prompt manually. |
+
 ## Citation
 If this repository is useful for your work, please cite both this paper and LISA.
 
