@@ -136,15 +136,15 @@ The `v2` tag is mutable. A pinned image digest and complete environment manifest
 
 ### Cluster-specific settings
 
-Before using the Slurm scripts, replace their partition, QoS, account, log path, `IMG`, `PROC_DATA`, `PROC_CKPT`, and `PROC_CODE` values. Also replace the hard-coded `ens3f0np0` NCCL/Gloo interface and review every bind mount, cache, dataset, checkpoint, and output path for the target cluster.
+Before using the Slurm scripts, replace their partition, QoS, account, log path, `IMG`, `PROC_DATA`, `PROC_CKPT`, `PROC_CODE`, and `PROC_OUTPUT` values. Also replace the hard-coded `ens3f0np0` NCCL/Gloo interface and review every bind mount, cache, dataset, checkpoint, and output path for the target cluster.
 
 ## Inference
 
-[`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings and the `IMG`, `PROC_CKPT`, `PROC_CODE`, model, input, and output paths.
+[`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings; `IMG`, `PROC_CKPT`, `PROC_CODE`, `PROC_DATA`, `PROC_OUTPUT`, `MODEL_NAME`, `TEST_IMAGE_SUBDIR`, `RUN_NAME`, and `LISA_PROMPT` can be overridden through the job environment.
 
 The merged model must include its exported `vision_tower/`. Point `--version` to the model directory and `--vision-tower` to that subdirectory; the current loader requires the local vision-tower path to contain `clip`.
 
-Set `--image_path` to either:
+Set `TEST_IMAGE_SUBDIR`, which the launcher forwards to `--image_path`, to either:
 
 - one `.jpg`, `.jpeg`, or `.png` file for single-image inference; or
 - a directory to process its top-level images sequentially with the same prompt.
@@ -153,6 +153,8 @@ Set `--image_path` to either:
 
 ```bash
 sbatch demo_LISA.sbatch
+# Or process one image under PROC_DATA:
+TEST_IMAGE_SUBDIR=test/images/rs06001.jpg sbatch demo_LISA.sbatch
 ```
 
 The script's `bf16`, 1024-token context, and reasoning prompt are the current reference inference settings. The checkpoint ID currently shown in the script is a site-specific placeholder, not a released model.
@@ -162,15 +164,16 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | Artifact | Status | Current availability |
 |---|---|---|
 | Source code and README assets | **Available** | Included in this repository. |
-| Unit tests | **Available** | Reasoning-template parsing and counterfactual augmentation tests are under [`tests/`](tests/); full GPU/model tests are not included. |
+| Unit tests | **Available** | CPU tests cover reasoning-template parsing and counterfactual augmentation under [`tests/`](tests/); full GPU/model tests are not included. |
 | HPC workflows | **Available** | Two-node training, checkpoint merging, and batch-demo Slurm scripts are included as cluster-specific examples. |
 | Runtime container | **External** | Docker Hub image [`mvakili96/lisa:v2`](https://hub.docker.com/r/mvakili96/lisa); its immutable digest is not yet recorded here. |
 | LISA/LLaVA base checkpoint | **External** | Must be obtained and prepared separately. |
 | SAM ViT-H checkpoint | **External** | Must be downloaded from the [SAM release](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth). |
+| Test imagery and ego-path annotations | **External** | Download from RailSem19 and TEP-Net; the repository includes the crop and coordinate-conversion script. |
 | Railway training data and labels | **Planned** | Not yet released. |
 | Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
-| Evaluation and bootstrap scripts | **Planned** | Not yet released. |
-| Route-logic audit labels and evaluator | **Planned** | Not yet released. |
+| Evaluation and bootstrap scripts | **Available** | CIoU, GIoU, and paired-bootstrap comparisons are implemented in [`scripts/evaluation/`](scripts/evaluation/). |
+| Route-logic audit labels and evaluator | **Partial** | The balanced 30-image type/direction annotations are included; the strict branch-aware evaluator is still planned. |
 | Exact environment lock | **Planned** | The container is available, but its digest and a complete environment manifest are not yet recorded. |
 
 The Slurm files contain paths from the original cluster and must be edited for a reader's storage, network, dataset, and checkpoint locations.
@@ -178,6 +181,8 @@ The Slurm files contain paths from the original cluster and must be edited for a
 ### What you can reproduce now
 
 - Inspect and test the rail-specific reasoning and augmentation logic.
+- Prepare the held-out test inputs from the original RailSem19 and TEP-Net downloads.
+- Evaluate prediction masks with the CIoU, GIoU, N-acc, and paired-bootstrap calculations used for the first two Results tables.
 - Pull the project container and run the supplied workflows with compatible user-provided data and checkpoints.
 - Train, merge, or run folder inference after replacing the example cluster paths.
 
@@ -185,13 +190,64 @@ The reported result tables cannot yet be reproduced end to end from public artif
 
 ## Roadmap
 
-- [ ] Publish a RailSem19-compliant data-access and preparation workflow, split manifests and checksums, project-annotation metadata, and a dataset validator.
+- [ ] Add preparation workflows and metadata for the semantic-training, reasoning-training, and validation data.
 - [ ] Release the merged rail checkpoint with a model card, pinned revision, and clean-download inference test.
-- [ ] Release the evaluation, paired-bootstrap, and route-audit code and metadata used for the result tables.
+- [ ] Release the strict branch-aware route-audit evaluator and remaining route metadata.
 - [ ] Add portable training and inference configurations without cluster-specific paths.
 - [ ] Pin the container digest and publish the complete environment manifest.
 
 ## Dataset Layout
+
+### Prepare the held-out test set
+
+Obtain `rs19_val.zip` from the [official RailSem19 portal](https://www.wilddash.cc/download) and `rs19_egopath.json` through the [TEP-Net repository](https://github.com/irtrailenium/train-ego-path-detection#ego-path-annotations-and-trained-model-weights). Place the annotation file and held-out images 6,001–8,000 in the paths shown under [Expected directory structure](#expected-directory-structure), then run inside the supported container:
+
+```bash
+python scripts/data/prepare_rs19_test_set.py \
+  --input-json dataset/external/tepnet/egopath/rs19_egopath.json \
+  --image-dir dataset/external/railsem19/test_images \
+  --output-dir dataset/test/images \
+  --output-json dataset/test/rs19_egopath_1024.json
+```
+
+Use new or empty output paths. The script creates centred, bottom-aligned 1024×1024 crops, retains annotation points inside each crop, and shifts their coordinates to match SAM's input size.
+
+### Run the test experiment
+
+[`demo_LISA.sbatch`](demo_LISA.sbatch) runs inference on `dataset/test/images`. Set the checkpoint, prompt, and a unique output name:
+
+```bash
+IMG="$PWD/LISA.sif" \
+PROC_CODE="$PWD" \
+PROC_CKPT="/absolute/path/to/checkpoints" \
+PROC_DATA="$PWD/dataset" \
+PROC_OUTPUT="$PWD/outputs/test" \
+MODEL_NAME="rail-lisa-clip" \
+RUN_NAME="joint_reasoning" \
+LISA_PROMPT="By examining rail continuity and switch geometry, segment the active ego-route the train is following in this image." \
+sbatch demo_LISA.sbatch
+```
+
+Repeat for each checkpoint and the two prompts under [Results](#results). Masks are written to `outputs/test/<run-name>/masks/` as JPEGs using the tested `0/100` encoding. The evaluator preserves the original workflow by treating pixels decoded exactly as `100` as foreground, so use the masks produced by the supplied demo without re-encoding them.
+
+Inside the container, evaluate one run or compare two prediction directories with the same tested calculations:
+
+```bash
+python scripts/evaluation/evaluate_ego_path.py \
+  --mode paired_comparison \
+  --gt-json dataset/test/rs19_egopath_1024.json \
+  --predictions outputs/test/joint_reasoning/masks \
+  --method-name "Joint training" \
+  --comparison-predictions outputs/test/semantic_reasoning/masks \
+  --comparison-method-name "Segmentation only" \
+  --audit-csv scripts/evaluation/metadata/route_logic_audit_30.csv
+```
+
+Paired mode prints each method's CIoU/GIoU, their percentage-point differences, paired-bootstrap intervals, and the number of valid pairs. Single-model mode additionally prints mIoU, N-acc, individual confidence intervals, and audit-subset IoU/false-positive diagnostics. Metric values are fractions (`0.8900` corresponds to `89.00%`); paired differences are percentage points.
+
+[`route_logic_audit_30.csv`](scripts/evaluation/metadata/route_logic_audit_30.csv) contains the audit labels (`T/M`: turnout/merge; `R/L`: right/left). The current evaluator reads its `image_index` column to report the audit subset separately; all other valid predictions are reported as the remaining set. These groups do not reconstruct the full switch-dependent/switch-independent split in the Results tables.
+
+The evaluator implements the segmentation metrics in the first Results table and the paired-bootstrap calculations in the second. Exact table reproduction also requires the original checkpoints, prompts, predictions, and complete scene split. It does **not** produce the third route-logic table: strict branch correctness and rationale type/direction scoring remain planned. Use `--mode single_model` for one prediction directory; comparison arguments are then ignored.
 
 ### Data composition and preprocessing
 
@@ -219,11 +275,16 @@ Counts are before stochastic counterfactual flipping.
 
 ```text
 ├── dataset
-│   ├── reason_seg
-│   │   └── ReasonSegRail
-│   │       ├── train
-│   │       ├── val
-│   │       └── explanatory
+│   ├── external
+│   │   ├── railsem19/test_images
+│   │   └── tepnet/egopath/rs19_egopath.json
+│   ├── test
+│   │   ├── images
+│   │   └── rs19_egopath_1024.json
+│   ├── reason_seg/ReasonSegRail
+│   │   ├── train
+│   │   ├── val
+│   │   └── explanatory
 │   ├── RailSem19-SemSeg-LISA
 │   │   ├── config_v2.0.json
 │   │   ├── training
@@ -288,6 +349,11 @@ The map lists the maintained entry points and rail-specific code; vendored LLaVA
 ├── fine_tune_LISA_2nodes.sbatch             # two-node training launcher
 ├── demo_LISA.sbatch                         # one-GPU inference launcher
 ├── merge_LISA.sbatch                        # CPU checkpoint conversion/export
+├── scripts/
+│   ├── data/prepare_rs19_test_set.py        # held-out image/annotation crops
+│   └── evaluation/
+│       ├── evaluate_ego_path.py             # CIoU/GIoU and paired bootstrap
+│       └── metadata/                         # route-logic audit labels
 ├── model/
 │   ├── LISA.py                              # adapted model and losses
 │   ├── llava/                               # LLaVA/CLIP stack
@@ -309,12 +375,12 @@ Run these from the repository root inside the supported container:
 ```bash
 python -m unittest discover -s tests -v
 python -m compileall -q chat_batch.py train_ds.py \
-  merge_lora_weights_and_save_hf_model.py model utils tests
+  merge_lora_weights_and_save_hf_model.py model utils scripts tests
 bash -n demo_LISA.sbatch fine_tune_LISA_2nodes.sbatch merge_LISA.sbatch
 git diff --check
 ```
 
-The 11 CPU unit tests check structured-rationale token alignment and left/right text, image, and mask transforms. They do not load a model or test datasets, training, checkpoint conversion, segmentation quality, or inference. Full model checks require the container, an NVIDIA GPU, and external checkpoints; end-to-end training/evaluation also requires the railway data.
+The 11 CPU unit tests check structured-rationale token alignment and left/right counterfactual transforms. They do not load a model, train, convert checkpoints, measure segmentation quality, or run inference. Full model checks require the container, an NVIDIA GPU, and external checkpoints; end-to-end training/evaluation also requires the railway data.
 
 ### Troubleshooting
 
@@ -360,4 +426,4 @@ This project adapts [LISA](https://github.com/JIA-Lab-research/LISA), built with
 
 Unless otherwise noted, repository code is licensed under the [Apache License 2.0](LICENSE). Third-party code and model weights retain their upstream terms; LLaVA-derived checkpoints may also inherit the base language model's license.
 
-RailSem19 data is not covered by this repository's license or redistributed here. Its [license agreement](https://www.wilddash.cc/license/railsem19) applies separate terms to imagery, dense metadata, and sparse metadata. Terms for project annotations and TEP-Net-derived ground truth will be documented with any future data release.
+RailSem19 is not covered by this repository's license. Raw source data is not bundled; the qualitative result figure contains six derived visualizations based on RailSem19 frames, which remain subject to the [RailSem19 license agreement](https://www.wilddash.cc/license/railsem19) and are not a substitute for the dataset. That agreement applies separate terms to imagery, dense metadata, and sparse metadata. The TEP-Net `rs19_egopath.json` annotation file is distributed upstream under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/); downloaded annotations and the derived crop-coordinate JSON remain local and are not relicensed by this repository. The included audit CSV contains project-created labels only—not image pixels or TEP-Net rail coordinates.
