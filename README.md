@@ -254,11 +254,27 @@ sbatch fine_tune_LISA_2nodes.sbatch
 
 Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded. Use a new `--exp_name` when starting a clean run.
 
-### Merge
-After the fine-tuning is done, in order to get the full model weight, merge the LoRA weights of pytorch_model.bin, and save the resulting model into your desired path in the Hugging Face format, edit paths in `merge_LISA.sbatch`, then run:
+### Convert and export
+
+[`merge_LISA.sbatch`](merge_LISA.sbatch) is the CPU-only export job. It first runs DeepSpeed's checkpoint-generated `zero_to_fp32.py` to combine the selected ZeRO shards into `fp32_model/pytorch_model.bin`. It then runs [`merge_lora_weights_and_save_hf_model.py`](merge_lora_weights_and_save_hf_model.py) to rebuild the base model, load that state, merge LoRA, and save the BF16 model, tokenizer, configuration, and tuned CLIP tower in `vision_tower/`.
+
+| Setting or argument | Purpose |
+|---|---|
+| Slurm header and `IMG` | CPU/RAM/time/log settings and the Apptainer image. |
+| `PROC_CODE` and `PROC_CKPT` | Host directories bound to the code and checkpoint locations inside the container. |
+| Checkpoint working directory | The selected `runs/<exp_name>/ckpt_model`, including `latest`, its rank shards, and `zero_to_fp32.py`. |
+| `--max_shard_size` | Keeps the consolidated state in the single file expected by the exporter; the reference uses `100GB`. |
+| `--version` | The same base LISA model used for training. |
+| `--weight` | The consolidated `fp32_model/pytorch_model.bin`. |
+| `--save_path` | A new directory for the complete merged model. |
+
+Edit those placeholders, then run:
+
 ```bash
 sbatch merge_LISA.sbatch
 ```
+
+Keep the entire output directory together because the root weights do not duplicate the saved CLIP tower. When moving it, pass its local `vision_tower/` explicitly as documented under [Inference](#inference).
 
 ## Citation
 If this repository is useful for your work, please cite both this paper and LISA.
