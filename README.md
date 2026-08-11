@@ -229,15 +229,30 @@ Counts are before stochastic counterfactual flipping.
 │   │   ├── training
 ```
 
-## HPC Slurm Workflow
-This repository includes cluster-specific Apptainer examples for training and merging. Complete the [environment setup](#environment-setup), provide the required checkpoints, and replace the site-specific settings before submission.
+## Distributed Training and Export
 
 ### Fine-tune
-The repository currently provides the two-node reference job. Edit its container, dataset, checkpoint, code, and network settings, then run:
+
+[`fine_tune_LISA_2nodes.sbatch`](fine_tune_LISA_2nodes.sbatch) is the current two-node launcher. Slurm starts four GPU tasks on each node, and every task runs one DeepSpeed rank inside the Apptainer container: eight ranks on eight NVIDIA L40 GPUs, using bfloat16 and ZeRO-2.
+
+The arguments passed to [`train_ds.py`](train_ds.py) control the reusable model, data, and training behavior. Slurm resources, rank rendezvous, the `ens3f0np0` interface, container and bind sources, caches, logs, and W&B paths are cluster-specific; replace them and ensure that the target cluster assigns one GPU to each task.
+
+| Setting | Current reference behavior |
+|---|---|
+| Schedule and batch | `--epochs=20` represents 20 sampled training/validation intervals, not 20 complete passes over the source files. Each interval has 50 optimizer updates. A per-GPU batch of 2 across 8 ranks with accumulation 1 gives an effective global batch of 16 and 1,000 updates in total. |
+| Sampling and responses | [`HybridDataset`](utils/dataset.py) independently samples the configured semantic or rail-reasoning stream with replacement using normalized `--sample_rates`. For reasoning images covered by the explanation manifest, `--explanatory=0.5` produces, in expectation, 50% rationale-only samples without mask loss, 25% mask-only samples, and 25% mask-plus-rationale samples ([loader logic](utils/reason_seg_dataset.py)). Exact draws and counterfactual flips are not replayable yet because no training seed is configured. |
+| Adaptation | LoRA uses rank 8, alpha 16, dropout 0.05, and `q_proj`/`v_proj` targets. The base learning rate is `1e-4`; the eight trainable CLIP blocks use `1e-5`. The selectively trained modules include the final 16 SAM blocks and the final eight CLIP blocks used by LLaVA, as summarized under [Model and Training](#model-and-training). |
+| Validation and checkpointing | Validation runs after every 50-update interval. `--val_dataset` selects the split; the launcher omits it and therefore inherits `ReasonSeg|val`, so set it explicitly for a different layout. Only an improvement in validation GIoU replaces `runs/<exp_name>/ckpt_model`; CIoU is reported but does not select the checkpoint. |
+| Monitoring | Rank 0 writes TensorBoard logs to `runs/<exp_name>`. W&B mirrors the training and validation metrics when `--use_wandb` is enabled, as it is in the reference launcher. Logged values include language and mask losses, ego-side loss, switch/right-blade token CE and accuracy, learning rates, timing, memory, CIoU, and GIoU. |
+| Reasoning probe | `--epoch_reasoning_inference` fixes a manifest-derived image subset before training, greedily generates rationales from the live distributed model after every interval, and writes per-image and summary JSON records to the Slurm log. It does not score masks and supports ZeRO stages 0–2 only; the reference uses ZeRO-2. |
 
 ```bash
+# Edit the launcher’s cluster settings and placeholder model/data paths first.
+# Reference run: 2 nodes, 8 GPUs, bf16, effective batch 16, 20 × 50 updates.
 sbatch fine_tune_LISA_2nodes.sbatch
 ```
+
+Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded. Use a new `--exp_name` when starting a clean run.
 
 ### Merge
 After the fine-tuning is done, in order to get the full model weight, merge the LoRA weights of pytorch_model.bin, and save the resulting model into your desired path in the Hugging Face format, edit paths in `merge_LISA.sbatch`, then run:
