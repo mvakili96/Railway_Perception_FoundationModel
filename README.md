@@ -183,13 +183,13 @@ The Slurm files contain paths from the original cluster and must be edited for a
 
 The reported result tables cannot yet be reproduced end to end from public artifacts alone.
 
-### Needed for full result reproduction
+## Roadmap
 
-- [ ] Railway training/evaluation data, labels, and preparation scripts.
-- [ ] Final rail-finetuned checkpoint and model card.
-- [ ] Evaluation, bootstrap, and route-audit code and metadata.
-- [ ] Pinned environment specification and immutable container digest.
-- [ ] Portable configuration examples without site-specific paths.
+- [ ] Publish a RailSem19-compliant data-access and preparation workflow, split manifests and checksums, project-annotation metadata, and a dataset validator.
+- [ ] Release the merged rail checkpoint with a model card, pinned revision, and clean-download inference test.
+- [ ] Release the evaluation, paired-bootstrap, and route-audit code and metadata used for the result tables.
+- [ ] Add portable training and inference configurations without cluster-specific paths.
+- [ ] Pin the container digest and publish the complete environment manifest.
 
 ## Dataset Layout
 
@@ -327,27 +327,37 @@ The 11 CPU unit tests check structured-rationale token alignment and left/right 
 | Rationale appears but no mask is saved | A mask is decoded only when the model generates `[SEG]`. Inspect `text_output`, use the documented prompt and `llava_v1` template, and verify that the merged model, tokenizer, and vision tower belong to the same export. Do not add `[SEG]` to the user prompt manually. |
 
 ## Citation
-If this repository is useful for your work, please cite both this paper and LISA.
+
+If this repository is useful for your work, please cite the [published paper](https://isprs-archives.copernicus.org/articles/XLIX-B3-2026/89/2026/) and LISA.
 
 ```bibtex
-@inproceedings{ghorbanalivakili2026railreason,
-  title={Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models},
-  author={Ghorbanalivakili, Mohammadjavad and Varghese, Ashley and Sohn, Gunho},
-  booktitle={Acccepted and to be Published on ISPRS Archives of Photogrammetry and Remote Sensing},
-  year={2026},
-  note={Update final volume/pages/DOI}
+@article{ghorbanalivakili2026reasoning,
+  author  = {Ghorbanalivakili, Mohammadjavad and Varghese, Ashley and Sohn, Gunho},
+  title   = {Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models},
+  journal = {The International Archives of the Photogrammetry, Remote Sensing and Spatial Information Sciences},
+  volume  = {XLIX-B3-2026},
+  pages   = {89--96},
+  year    = {2026},
+  doi     = {10.5194/isprs-archives-XLIX-B3-2026-89-2026},
+  url     = {https://isprs-archives.copernicus.org/articles/XLIX-B3-2026/89/2026/}
 }
 
-@inproceedings{lai2024lisa,
-  title={LISA: Reasoning Segmentation via Large Language Model},
-  author={Lai, Xin and Tian, Zhuotao and Chen, Yukang and Li, Yanwei and Yuan, Yuhui and Liu, Shu and Jia, Jiaya},
-  booktitle={CVPR},
-  year={2024}
+@inproceedings{Lai_2024_CVPR,
+  author    = {Lai, Xin and Tian, Zhuotao and Chen, Yukang and Li, Yanwei and Yuan, Yuhui and Liu, Shu and Jia, Jiaya},
+  title     = {LISA: Reasoning Segmentation via Large Language Model},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  month     = {June},
+  year      = {2024},
+  pages     = {9579--9589}
 }
 ```
 
-## Acknowledgement
-This work is built upon:
-- [LISA](https://github.com/JIA-Lab-research/LISA)
-- [LLaVA](https://github.com/haotian-liu/LLaVA)
-- [Segment Anything (SAM)](https://github.com/facebookresearch/segment-anything)
+## Credits
+
+This project adapts [LISA](https://github.com/JIA-Lab-research/LISA), built with [LLaVA](https://github.com/haotian-liu/LLaVA) and [Segment Anything (SAM)](https://github.com/facebookresearch/segment-anything). [RailSem19](https://openaccess.thecvf.com/content_CVPRW_2019/html/Autonomous_Driving/Zendel_RailSem19_A_Dataset_for_Semantic_Rail_Scene_Understanding_CVPRW_2019_paper.html) provides the source railway imagery and semantic labels. Switch rationales and reasoning masks were annotated for this project; evaluation ego-path ground truth derives from the RailSem19 extension introduced with [TEP-Net](https://arxiv.org/abs/2403.13094).
+
+## License
+
+Unless otherwise noted, repository code is licensed under the [Apache License 2.0](LICENSE). Third-party code and model weights retain their upstream terms; LLaVA-derived checkpoints may also inherit the base language model's license.
+
+RailSem19 data is not covered by this repository's license or redistributed here. Its [license agreement](https://www.wilddash.cc/license/railsem19) applies separate terms to imagery, dense metadata, and sparse metadata. Terms for project annotations and TEP-Net-derived ground truth will be documented with any future data release.
