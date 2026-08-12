@@ -1,0 +1,28 @@
+{
+  "labels": [
+    {
+      "name": "track--bed",
+      "readable": "Track bed",
+      "instances": true,
+      "evaluate": true,
+      "color": [0, 0, 0]
+    },
+    {
+      "name": "rail--line",
+      "readable": "Rail",
+      "instances": true,
+      "evaluate": true,
+      "color": [1, 1, 1]
+    },
+    {
+      "name": "background",
+      "readable": "Background",
+      "instances": false,
+      "evaluate": true,
+      "color": [2, 2, 2]
+    }
+  ],
+  "version": "2.0",
+  "mapping": "mvd20",
+  "floder_structue": "{split}/{content}/{key:.{22}}.{ext}}"
+}

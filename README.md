@@ -170,7 +170,8 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | LISA/LLaVA base checkpoint | **External** | Must be obtained and prepared separately. |
 | SAM ViT-H checkpoint | **External** | Must be downloaded from the [SAM release](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth). |
 | Test and validation imagery/ego-path annotations | **External** | Download from RailSem19 and TEP-Net; crop, coordinate-conversion, and per-image validation-label scripts are included. |
-| Railway training data and labels | **Planned** | Not yet released. |
+| Semantic-training data | **External** | Obtain RailSem19 imagery and dense labels under its terms; conversion instructions and the three-class configuration are included. |
+| Railway reasoning-training data and labels | **Planned** | Not yet released. |
 | Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
 | Evaluation and bootstrap scripts | **Available** | CIoU, GIoU, and paired-bootstrap comparisons are implemented in [`scripts/evaluation/`](scripts/evaluation/). |
 | Route-logic audit labels and evaluator | **Partial** | The balanced 30-image type/direction annotations are included; the strict branch-aware evaluator is still planned. |
@@ -202,11 +203,30 @@ The preparation commands below write directly to the locations used by the repos
 
 | Split | Final location | Used by |
 |---|---|---|
+| Semantic training | `dataset/RailSem19-SemSeg-LISA/` with images under `training/images/` and labels under `training/v2.0/labels/` | [`init_railsem`](utils/sem_seg_dataset.py) with `--dataset_dir=dataset --sem_seg_data=railsem` |
 | Validation | `dataset/reason_seg/ReasonSegRail/val/` with one `.jpg` and same-stem `.json` per sample | [`ValDataset`](utils/dataset.py) with `--dataset_dir=dataset --val_dataset='ReasonSegRail|val'` |
 | Test images | `dataset/test/images/` | [`demo_LISA.sbatch`](demo_LISA.sbatch) when `PROC_DATA="$PWD/dataset"` and `TEST_IMAGE_SUBDIR=test/images` |
 | Test ground truth | `dataset/test/rs19_egopath_1024.json` | [`evaluate_ego_path.py`](scripts/evaluation/evaluate_ego_path.py) through `--gt-json` |
 
 The paths under `dataset/external/` are local staging locations for downloaded source files. They may be changed through the script arguments, but keep the generated files in the final locations above unless the corresponding loader or launcher arguments are also changed. The complete layout is shown under [Expected directory structure](#expected-directory-structure).
+
+### Prepare the semantic-training set
+
+Obtain the original RailSem19 intensity images and dense semantic label maps from the [official portal](https://www.wilddash.cc/download) under the [RailSem19 license](https://www.wilddash.cc/license/railsem19). Keep these downloads local under `dataset/external/railsem19/semantic/` and prepare the first 6,000 image/label pairs in filename order:
+
+- Apply the same centred, bottom-aligned 1024×1024 crop to each image and its dense mask: `x0 = (width - 1024) // 2`, `y0 = height - 1024`, then crop `[y0:height, x0:x0+1024]`.
+- Create an unsigned 8-bit label mask initialized to class `2` (**Background**). Set pixels whose original RailSem19 value is `15` (`trackbed`) to class `0` (**Track bed**) and pixels with value `12` (`rail-track`) to class `1` (**Rail**).
+- Save every crop as `training/images/<stem>.jpg` and its class-ID mask as `training/v2.0/labels/<stem>.png`. A single-channel PNG is sufficient; three equal channels are also accepted by the loader.
+- Copy the provided [`config_v2.0.json`](scripts/data/templates/railsem19/config_v2.0.json) to the dataset root.
+
+```bash
+mkdir -p dataset/RailSem19-SemSeg-LISA/training/images \
+  dataset/RailSem19-SemSeg-LISA/training/v2.0/labels
+cp scripts/data/templates/railsem19/config_v2.0.json \
+  dataset/RailSem19-SemSeg-LISA/config_v2.0.json
+```
+
+The final layout must be `dataset/RailSem19-SemSeg-LISA/training/images/<stem>.jpg` and `training/v2.0/labels/<stem>.png`, with paired stems. This is the structure loaded by [`init_railsem`](utils/sem_seg_dataset.py) when using `--dataset_dir=dataset --sem_seg_data=railsem`.
 
 ### Prepare the validation set
 
@@ -319,6 +339,9 @@ Counts are before stochastic counterfactual flipping.
 ├── dataset
 │   ├── external
 │   │   ├── railsem19
+│   │   │   ├── semantic
+│   │   │   │   ├── images
+│   │   │   │   └── labels
 │   │   │   ├── test_images
 │   │   │   └── validation_images
 │   │   └── tepnet/egopath/rs19_egopath.json
@@ -333,7 +356,9 @@ Counts are before stochastic counterfactual flipping.
 │   │   └── explanatory
 │   ├── RailSem19-SemSeg-LISA
 │   │   ├── config_v2.0.json
-│   │   ├── training
+│   │   └── training
+│   │       ├── images
+│   │       └── v2.0/labels
 ```
 
 ## Distributed Training and Export
