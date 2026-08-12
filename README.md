@@ -169,7 +169,7 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | Runtime container | **External** | Docker Hub image [`mvakili96/lisa:v2`](https://hub.docker.com/r/mvakili96/lisa); its immutable digest is not yet recorded here. |
 | LISA/LLaVA base checkpoint | **External** | Must be obtained and prepared separately. |
 | SAM ViT-H checkpoint | **External** | Must be downloaded from the [SAM release](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth). |
-| Test imagery and ego-path annotations | **External** | Download from RailSem19 and TEP-Net; the repository includes the crop and coordinate-conversion script. |
+| Test and validation imagery/ego-path annotations | **External** | Download from RailSem19 and TEP-Net; crop, coordinate-conversion, and per-image validation-label scripts are included. |
 | Railway training data and labels | **Planned** | Not yet released. |
 | Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
 | Evaluation and bootstrap scripts | **Available** | CIoU, GIoU, and paired-bootstrap comparisons are implemented in [`scripts/evaluation/`](scripts/evaluation/). |
@@ -190,13 +190,48 @@ The reported result tables cannot yet be reproduced end to end from public artif
 
 ## Roadmap
 
-- [ ] Add preparation workflows and metadata for the semantic-training, reasoning-training, and validation data.
+- [ ] Add preparation workflows and metadata for the semantic-training and reasoning-training data.
 - [ ] Release the merged rail checkpoint with a model card, pinned revision, and clean-download inference test.
 - [ ] Release the strict branch-aware route-audit evaluator and remaining route metadata.
 - [ ] Add portable training and inference configurations without cluster-specific paths.
 - [ ] Pin the container digest and publish the complete environment manifest.
 
 ## Dataset Layout
+
+The preparation commands below write directly to the locations used by the repository:
+
+| Split | Final location | Used by |
+|---|---|---|
+| Validation | `dataset/reason_seg/ReasonSegRail/val/` with one `.jpg` and same-stem `.json` per sample | [`ValDataset`](utils/dataset.py) with `--dataset_dir=dataset --val_dataset='ReasonSegRail|val'` |
+| Test images | `dataset/test/images/` | [`demo_LISA.sbatch`](demo_LISA.sbatch) when `PROC_DATA="$PWD/dataset"` and `TEST_IMAGE_SUBDIR=test/images` |
+| Test ground truth | `dataset/test/rs19_egopath_1024.json` | [`evaluate_ego_path.py`](scripts/evaluation/evaluate_ego_path.py) through `--gt-json` |
+
+The paths under `dataset/external/` are local staging locations for downloaded source files. They may be changed through the script arguments, but keep the generated files in the final locations above unless the corresponding loader or launcher arguments are also changed. The complete layout is shown under [Expected directory structure](#expected-directory-structure).
+
+### Prepare the validation set
+
+Place only the 500 validation images (`rs08000.jpg`–`rs08499.jpg`) in `dataset/external/railsem19/validation_images/`, alongside the TEP-Net annotation download already used for the test set. First create the crops and shifted rail coordinates:
+
+```bash
+mkdir -p dataset/metadata
+python scripts/data/prepare_rs19_test_set.py \
+  --input-json dataset/external/tepnet/egopath/rs19_egopath.json \
+  --image-dir dataset/external/railsem19/validation_images \
+  --output-dir dataset/reason_seg/ReasonSegRail/val \
+  --output-json dataset/metadata/rs19_validation_egopath_1024.json
+```
+
+Then generate the per-image validation JSON beside each crop:
+
+```bash
+python scripts/data/generate_rs19_crop_jsons.py \
+  --image-dir dataset/reason_seg/ReasonSegRail/val \
+  --egopath-json dataset/metadata/rs19_validation_egopath_1024.json \
+  --template-json scripts/data/templates/reason_seg_validation_template.json \
+  --limit 500
+```
+
+The included template is one complete anonymized annotation sample, including its original polygon coordinates. It supplies the `text`, `is_sentence`, and shape structure expected by [`get_mask_from_json`](utils/data_processing.py); for every validation image, the generator replaces the prompts, image name, and points, forming the target polygon from the right rail followed by the reversed left rail. The current validation loader uses the first generated prompt. Select this split with `--val_dataset='ReasonSegRail|val'`.
 
 ### Prepare the held-out test set
 
@@ -249,6 +284,13 @@ Paired mode prints each method's CIoU/GIoU, their percentage-point differences, 
 
 The evaluator implements the segmentation metrics in the first Results table and the paired-bootstrap calculations in the second. Exact table reproduction also requires the original checkpoints, prompts, predictions, and complete scene split. It does **not** produce the third route-logic table: strict branch correctness and rationale type/direction scoring remain planned. Use `--mode single_model` for one prediction directory; comparison arguments are then ignored.
 
+Check the generated locations before running validation or inference:
+
+```bash
+find dataset/reason_seg/ReasonSegRail/val -maxdepth 1 -type f | sort | head
+find dataset/test -maxdepth 2 -type f | sort | head
+```
+
 ### Data composition and preprocessing
 
 | Data type (n) | RailSem19 source and selection | Input dimensions | Encoder-specific preprocessing |
@@ -276,8 +318,12 @@ Counts are before stochastic counterfactual flipping.
 ```text
 ├── dataset
 │   ├── external
-│   │   ├── railsem19/test_images
+│   │   ├── railsem19
+│   │   │   ├── test_images
+│   │   │   └── validation_images
 │   │   └── tepnet/egopath/rs19_egopath.json
+│   ├── metadata
+│   │   └── rs19_validation_egopath_1024.json
 │   ├── test
 │   │   ├── images
 │   │   └── rs19_egopath_1024.json
@@ -350,7 +396,9 @@ The map lists the maintained entry points and rail-specific code; vendored LLaVA
 ├── demo_LISA.sbatch                         # one-GPU inference launcher
 ├── merge_LISA.sbatch                        # CPU checkpoint conversion/export
 ├── scripts/
-│   ├── data/prepare_rs19_test_set.py        # held-out image/annotation crops
+│   ├── data/
+│   │   ├── prepare_rs19_test_set.py         # image/annotation crops
+│   │   └── generate_rs19_crop_jsons.py      # per-image validation JSONs
 │   └── evaluation/
 │       ├── evaluate_ego_path.py             # CIoU/GIoU and paired bootstrap
 │       └── metadata/                         # route-logic audit labels
