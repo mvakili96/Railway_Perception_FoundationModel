@@ -11,7 +11,11 @@ dataset/
 │   └── tepnet/egopath/rs19_egopath.json   # official TEP-Net annotations
 ├── metadata/
 │   └── rs19_validation_egopath_1024.json  # shifted validation rails
-├── reason_seg/ReasonSegRail/val/           # validation crops + per-image JSON
+├── reason_seg/ReasonSegRail/
+│   ├── train/                              # reasoning images + polygon JSON
+│   ├── val/                                # validation crops + per-image JSON
+│   ├── explanatory/train.json              # explanatory supervision
+│   └── weight_maps/                        # optional per-image pixel weights
 ├── RailSem19-SemSeg-LISA/
 │   ├── config_v2.0.json                    # copied three-class config
 │   └── training/
@@ -29,3 +33,5 @@ See the main README for the validation and held-out test preparation commands.
 The final validation pairs must be under `reason_seg/ReasonSegRail/val/`. Final test images go under `test/images/`, with their combined shifted-coordinate JSON at `test/rs19_egopath_1024.json`. These are the default locations consumed by the validation loader, demo launcher, and evaluator; `external/` is only a local staging area.
 
 The semantic loader expects `RailSem19-SemSeg-LISA/config_v2.0.json`, images under `training/images/`, and same-stem masks under `training/v2.0/labels/`. The main README shows how to generate this three-class dataset without committing the RailSem19 source files.
+
+Project-created reasoning annotations are available from the repository owner upon request and belong under `reason_seg/ReasonSegRail/` following the structure in the main README. RailSem19 source material retains its original terms.

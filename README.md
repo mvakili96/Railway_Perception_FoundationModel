@@ -171,7 +171,7 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | SAM ViT-H checkpoint | **External** | Must be downloaded from the [SAM release](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth). |
 | Test and validation imagery/ego-path annotations | **External** | Download from RailSem19 and TEP-Net; crop, coordinate-conversion, and per-image validation-label scripts are included. |
 | Semantic-training data | **External** | Obtain RailSem19 imagery and dense labels under its terms; conversion instructions and the three-class configuration are included. |
-| Railway reasoning-training data and labels | **Planned** | Not yet released. |
+| Railway reasoning-training data and labels | **Upon request** | Project-created annotations are available from the repository owner upon request; underlying RailSem19 material remains subject to its license. |
 | Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
 | Evaluation and bootstrap scripts | **Available** | CIoU, GIoU, and paired-bootstrap comparisons are implemented in [`scripts/evaluation/`](scripts/evaluation/). |
 | Route-logic audit labels and evaluator | **Partial** | The balanced 30-image type/direction annotations are included; the strict branch-aware evaluator is still planned. |
@@ -191,7 +191,6 @@ The reported result tables cannot yet be reproduced end to end from public artif
 
 ## Roadmap
 
-- [ ] Add preparation workflows and metadata for the semantic-training and reasoning-training data.
 - [ ] Release the merged rail checkpoint with a model card, pinned revision, and clean-download inference test.
 - [ ] Release the strict branch-aware route-audit evaluator and remaining route metadata.
 - [ ] Add portable training and inference configurations without cluster-specific paths.
@@ -204,6 +203,7 @@ The preparation commands below write directly to the locations used by the repos
 | Split | Final location | Used by |
 |---|---|---|
 | Semantic training | `dataset/RailSem19-SemSeg-LISA/` with images under `training/images/` and labels under `training/v2.0/labels/` | [`init_railsem`](utils/sem_seg_dataset.py) with `--dataset_dir=dataset --sem_seg_data=railsem` |
+| Reasoning training | `dataset/reason_seg/ReasonSegRail/` with `train/`, `explanatory/train.json`, and `weight_maps/` | [`ReasonSegDataset`](utils/reason_seg_dataset.py) with `--dataset_dir=dataset --reason_seg_rail_data='ReasonSegRail|train'` |
 | Validation | `dataset/reason_seg/ReasonSegRail/val/` with one `.jpg` and same-stem `.json` per sample | [`ValDataset`](utils/dataset.py) with `--dataset_dir=dataset --val_dataset='ReasonSegRail|val'` |
 | Test images | `dataset/test/images/` | [`demo_LISA.sbatch`](demo_LISA.sbatch) when `PROC_DATA="$PWD/dataset"` and `TEST_IMAGE_SUBDIR=test/images` |
 | Test ground truth | `dataset/test/rs19_egopath_1024.json` | [`evaluate_ego_path.py`](scripts/evaluation/evaluate_ego_path.py) through `--gt-json` |
@@ -227,6 +227,12 @@ cp scripts/data/templates/railsem19/config_v2.0.json \
 ```
 
 The final layout must be `dataset/RailSem19-SemSeg-LISA/training/images/<stem>.jpg` and `training/v2.0/labels/<stem>.png`, with paired stems. This is the structure loaded by [`init_railsem`](utils/sem_seg_dataset.py) when using `--dataset_dir=dataset --sem_seg_data=railsem`.
+
+### Reasoning-training set
+
+The 242 reasoning samples were manually selected from the first 4,000 RailSem19 images where the annotated ego-route crosses a switch whose configuration is visually clear. The set combines 126 manually cropped close-up views that retain the switch mechanism after CLIP preprocessing with 116 wider 1024×1024 views that preserve scene context. Each sample includes an ego-route polygon and five segmentation-prompt paraphrases; a companion manifest provides explanatory supervision describing switch topology, blade state, rail continuity, and the active route.
+
+All samples are used for training; validation and testing use separate RailSem19 ranges. Place the requested package under `dataset/reason_seg/ReasonSegRail/` as shown below. The project-created reasoning annotations are available from the repository owner upon request; any accompanying RailSem19 material remains governed by the [RailSem19 license](https://www.wilddash.cc/license/railsem19).
 
 ### Prepare the validation set
 
@@ -353,7 +359,8 @@ Counts are before stochastic counterfactual flipping.
 │   ├── reason_seg/ReasonSegRail
 │   │   ├── train
 │   │   ├── val
-│   │   └── explanatory
+│   │   ├── explanatory/train.json
+│   │   └── weight_maps
 │   ├── RailSem19-SemSeg-LISA
 │   │   ├── config_v2.0.json
 │   │   └── training
