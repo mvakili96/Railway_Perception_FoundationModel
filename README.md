@@ -26,7 +26,7 @@ Prompts used:
 |---|---|---|---|---|---|---|---|---|
 | Original LISA | 30.07 | 32.39 | 36.59 | 39.73 | 8.25 | 7.70 | 4.87 | 4.57 |
 | Rail-finetuned LISA — semantic only | 66.23 | 66.15 | 56.95 | 57.97 | 65.92 | 66.03 | 57.21 | 58.18 |
-| **Rail-finetuned LISA — semantic + reasoning** | **89.00** | **88.34** | **90.49** | **90.33** | 65.58 | 65.94 | 57.87 | 58.89 |
+| [**Rail-finetuned LISA — semantic + reasoning**](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip) | **89.00** | **88.34** | **90.49** | **90.33** | 65.58 | 65.94 | 57.87 | 58.89 |
 
 CIoU is the sum of intersections divided by the sum of unions across a subset; GIoU is the mean of image-level IoU. Compared with semantic-only training, joint training gains 22.77/22.19 CIoU/GIoU points on switch-independent scenes and 33.53/32.35 on switch-dependent scenes; all paired-bootstrap 95% confidence intervals are above zero.
 
@@ -132,7 +132,7 @@ The `v2` tag is mutable. A pinned image digest and complete environment manifest
 |---|---|
 | Current finetuning (`--hf_merged_model`) | A complete LISA-compatible Hugging Face model directory containing model, tokenizer, configuration, and its saved `vision_tower/`. The local `LISA-7B-v1` path in the reference job is not included in this repository. |
 | Initialization from backbones | A prepared LLaVA checkpoint following the [upstream LISA instructions](https://github.com/JIA-Lab-research/LISA#pre-trained-weights) and the [LLaVA model-preparation guidance](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md), plus the [SAM ViT-H checkpoint](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth) supplied through `--vision_pretrained`. |
-| Inference | A merged rail-finetuned model directory with its `vision_tower/`; the final project checkpoint is not yet released. |
+| Inference | The public [semantic-and-reasoning checkpoint](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip), downloaded as a complete folder with its `vision_tower/`. |
 
 ### Cluster-specific settings
 
@@ -141,6 +141,13 @@ Before using the Slurm scripts, replace their partition, QoS, account, log path,
 ## Inference
 
 [`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings; `IMG`, `PROC_CKPT`, `PROC_CODE`, `PROC_DATA`, `PROC_OUTPUT`, `MODEL_NAME`, `TEST_IMAGE_SUBDIR`, `RUN_NAME`, and `LISA_PROMPT` can be overridden through the job environment.
+
+Download the released joint checkpoint:
+
+```bash
+hf download m-vakili75/railway-lisa-7b-semantic-reasoning-clip \
+  --local-dir /absolute/path/to/checkpoints/railway-lisa-7b-semantic-reasoning-clip
+```
 
 The merged model must include its exported `vision_tower/`. Point `--version` to the model directory and `--vision-tower` to that subdirectory; the current loader requires the local vision-tower path to contain `clip`.
 
@@ -152,12 +159,18 @@ Set `TEST_IMAGE_SUBDIR`, which the launcher forwards to `--image_path`, to eithe
 `--mask_save_path` receives thresholded mask JPEGs, `--vis_save_path` receives red-overlay JPEGs, and the generated rationale is printed to the Slurm log. After editing the placeholders, run:
 
 ```bash
+PROC_CKPT=/absolute/path/to/checkpoints \
+MODEL_NAME=railway-lisa-7b-semantic-reasoning-clip \
 sbatch demo_LISA.sbatch
-# Or process one image under PROC_DATA:
-TEST_IMAGE_SUBDIR=test/images/rs06001.jpg sbatch demo_LISA.sbatch
+
+# Or process one image under PROC_DATA.
+PROC_CKPT=/absolute/path/to/checkpoints \
+MODEL_NAME=railway-lisa-7b-semantic-reasoning-clip \
+TEST_IMAGE_SUBDIR=test/images/rs06001.jpg \
+sbatch demo_LISA.sbatch
 ```
 
-The script's `bf16`, 1024-token context, and reasoning prompt are the current reference inference settings. The checkpoint ID currently shown in the script is a site-specific placeholder, not a released model.
+The script's `bf16`, 1024-token context, and reasoning prompt are the current reference inference settings. The checkpoint was verified as a complete 15.58 GiB Hugging Face snapshot; use the supplied `chat_batch.py` path because it applies the bundled tokenizer's generation-token IDs at runtime.
 
 ## Reproducibility Status
 
@@ -172,7 +185,8 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | Test and validation imagery/ego-path annotations | **External** | Download from RailSem19 and TEP-Net; crop, coordinate-conversion, and per-image validation-label scripts are included. |
 | Semantic-training data | **External** | Obtain RailSem19 imagery and dense labels under its terms; conversion instructions and the three-class configuration are included. |
 | Railway reasoning-training data and labels | **Upon request** | Project-created annotations are available from the repository owner upon request; underlying RailSem19 material remains subject to its license. |
-| Final rail-finetuned checkpoint | **Planned** | A Hugging Face model release is planned. |
+| Joint semantic-and-reasoning checkpoint | **Available** | Public Hugging Face release: [`m-vakili75/railway-lisa-7b-semantic-reasoning-clip`](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip). |
+| Semantic-only checkpoint | **Planned** | The Table 1 comparison checkpoint will be released separately. |
 | Evaluation and bootstrap scripts | **Available** | CIoU, GIoU, and paired-bootstrap comparisons are implemented in [`scripts/evaluation/`](scripts/evaluation/). |
 | Route-logic audit labels and evaluator | **Partial** | The balanced 30-image type/direction annotations are included; the strict branch-aware evaluator is still planned. |
 | Exact environment lock | **Planned** | The container is available, but its digest and a complete environment manifest are not yet recorded. |
@@ -184,14 +198,15 @@ The Slurm files contain paths from the original cluster and must be edited for a
 - Inspect and test the rail-specific reasoning and augmentation logic.
 - Prepare the held-out test inputs from the original RailSem19 and TEP-Net downloads.
 - Evaluate prediction masks with the CIoU, GIoU, N-acc, and paired-bootstrap calculations used for the first two Results tables.
-- Pull the project container and run the supplied workflows with compatible user-provided data and checkpoints.
+- Pull the project container and run inference with the released joint checkpoint.
 - Train, merge, or run folder inference after replacing the example cluster paths.
 
 The reported result tables cannot yet be reproduced end to end from public artifacts alone.
 
 ## Roadmap
 
-- [ ] Release the merged rail checkpoint with a model card, pinned revision, and clean-download inference test.
+- [x] Release the joint semantic-and-reasoning checkpoint with its model card.
+- [ ] Release the semantic-only comparison checkpoint and record pinned model revisions.
 - [ ] Release the strict branch-aware route-audit evaluator and remaining route metadata.
 - [ ] Add portable training and inference configurations without cluster-specific paths.
 - [ ] Pin the container digest and publish the complete environment manifest.
@@ -283,7 +298,7 @@ PROC_CODE="$PWD" \
 PROC_CKPT="/absolute/path/to/checkpoints" \
 PROC_DATA="$PWD/dataset" \
 PROC_OUTPUT="$PWD/outputs/test" \
-MODEL_NAME="rail-lisa-clip" \
+MODEL_NAME="railway-lisa-7b-semantic-reasoning-clip" \
 RUN_NAME="joint_reasoning" \
 LISA_PROMPT="By examining rail continuity and switch geometry, segment the active ego-route the train is following in this image." \
 sbatch demo_LISA.sbatch
