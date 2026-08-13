@@ -24,7 +24,7 @@ Prompts used:
 
 | Model | Reasoning: switch-independent CIoU | Reasoning: switch-independent GIoU | Reasoning: switch-dependent CIoU | Reasoning: switch-dependent GIoU | Generic: switch-independent CIoU | Generic: switch-independent GIoU | Generic: switch-dependent CIoU | Generic: switch-dependent GIoU |
 |---|---|---|---|---|---|---|---|---|
-| Original LISA | 30.07 | 32.39 | 36.59 | 39.73 | 8.25 | 7.70 | 4.87 | 4.57 |
+| [Original LISA (`xinlai/LISA-7B-v1`)](https://huggingface.co/xinlai/LISA-7B-v1) | 30.07 | 32.39 | 36.59 | 39.73 | 8.25 | 7.70 | 4.87 | 4.57 |
 | Rail-finetuned LISA — semantic only | 66.23 | 66.15 | 56.95 | 57.97 | 65.92 | 66.03 | 57.21 | 58.18 |
 | [**Rail-finetuned LISA — semantic + reasoning**](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip) | **89.00** | **88.34** | **90.49** | **90.33** | 65.58 | 65.94 | 57.87 | 58.89 |
 
@@ -130,9 +130,19 @@ The `v2` tag is mutable. A pinned image digest and complete environment manifest
 
 | Workflow | Required checkpoint |
 |---|---|
-| Current finetuning (`--hf_merged_model`) | A complete LISA-compatible Hugging Face model directory containing model, tokenizer, configuration, and its saved `vision_tower/`. The local `LISA-7B-v1` path in the reference job is not included in this repository. |
+| Original baseline and current finetuning (`--hf_merged_model`) | The authors' [`xinlai/LISA-7B-v1`](https://huggingface.co/xinlai/LISA-7B-v1) Hugging Face checkpoint. It is evaluated unchanged as **Original LISA** in the first Results table and initializes both railway-finetuned models. |
 | Initialization from backbones | A prepared LLaVA checkpoint following the [upstream LISA instructions](https://github.com/JIA-Lab-research/LISA#pre-trained-weights) and the [LLaVA model-preparation guidance](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md), plus the [SAM ViT-H checkpoint](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth) supplied through `--vision_pretrained`. |
 | Inference | The public [semantic-and-reasoning checkpoint](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip), downloaded as a complete folder with its `vision_tower/`. |
+
+Download the exact LISA initialization/baseline snapshot used here:
+
+```bash
+hf download xinlai/LISA-7B-v1 \
+  --revision 43c754eef75871fcc11c84d3930a402f7b0a754f \
+  --local-dir /absolute/path/to/checkpoints/LISA-7B-v1
+```
+
+Set the launcher's `--version` argument to that local directory. The pinned revision avoids silently changing the initialization if the Hugging Face repository is updated later.
 
 ### Cluster-specific settings
 
@@ -180,7 +190,7 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | Unit tests | **Available** | CPU tests cover reasoning-template parsing and counterfactual augmentation under [`tests/`](tests/); full GPU/model tests are not included. |
 | HPC workflows | **Available** | Two-node training, checkpoint merging, and batch-demo Slurm scripts are included as cluster-specific examples. |
 | Runtime container | **External** | Docker Hub image [`mvakili96/lisa:v2`](https://hub.docker.com/r/mvakili96/lisa); its immutable digest is not yet recorded here. |
-| LISA/LLaVA base checkpoint | **External** | Must be obtained and prepared separately. |
+| LISA base checkpoint | **External** | Download the authors' [`xinlai/LISA-7B-v1`](https://huggingface.co/xinlai/LISA-7B-v1) checkpoint; it is the original Table 1 baseline and the initialization for the railway fine-tunes. |
 | SAM ViT-H checkpoint | **External** | Must be downloaded from the [SAM release](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth). |
 | Test and validation imagery/ego-path annotations | **External** | Download from RailSem19 and TEP-Net; crop, coordinate-conversion, and per-image validation-label scripts are included. |
 | Semantic-training data | **External** | Obtain RailSem19 imagery and dense labels under its terms; conversion instructions and the three-class configuration are included. |
