@@ -148,6 +148,13 @@ Set the launcher's `--version` argument to that local directory. The pinned revi
 
 Before using the Slurm scripts, replace their partition, QoS, account, log path, `IMG`, `PROC_DATA`, `PROC_CKPT`, `PROC_CODE`, and `PROC_OUTPUT` values. Also replace the hard-coded `ens3f0np0` NCCL/Gloo interface and review every bind mount, cache, dataset, checkpoint, and output path for the target cluster.
 
+Slurm opens each `#SBATCH -o` path before the job starts. After changing the absolute log paths in [`merge_LISA.sbatch`](merge_LISA.sbatch) and [`demo_LISA.sbatch`](demo_LISA.sbatch) to your own home directory, create their parent directories before calling `sbatch`:
+
+```bash
+mkdir -p "$HOME/logs_LISA_merge"
+mkdir -p "$HOME/logs_LISA_demo"
+```
+
 ## Inference
 
 [`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings; `IMG`, `PROC_CKPT`, `PROC_CODE`, `PROC_DATA`, `PROC_OUTPUT`, `MODEL_NAME`, `TEST_IMAGE_SUBDIR`, `RUN_NAME`, and `LISA_PROMPT` can be overridden through the job environment.
