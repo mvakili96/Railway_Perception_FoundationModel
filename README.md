@@ -6,13 +6,15 @@
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
 [![Built on LISA](https://img.shields.io/badge/Built%20on-LISA-2563eb)](https://github.com/JIA-Lab-research/LISA)
-![Status: Research prototype](https://img.shields.io/badge/Status-Research%20prototype-f59e0b)
+![Status: Prototype](https://img.shields.io/badge/Status-Research%20prototype-f59e0b)
 
 This is the official implementation of [Reasoning-guided Ego-path Segmentation for Autonomous Trains using Vision-language Models](https://doi.org/10.5194/isprs-archives-XLIX-B3-2026-89-2026), extended with selective CLIP/SAM tuning, weighted rail-reasoning tokens, counterfactual flipping, and an auxiliary ego-side loss. It predicts a binary ego-route mask and optional rationale from a rail image and text prompt.
 
 ## Results
 
 Evaluated on 2,000 held-out test images: 1,822 switch-independent images and 178 switch-dependent images where route selection requires interpreting a visible downstream switch. Scores are percentages against the ground-truth ego-route.
+
+These results update [our published paper](https://doi.org/10.5194/isprs-archives-XLIX-B3-2026-89-2026) using the latest checkpoints and evaluation. The exact values below do not appear in the paper.
 
 Prompts used:
 
@@ -21,11 +23,11 @@ Prompts used:
 
 <div align="center">
 
-| Model | Reasoning: switch-independent CIoU | Reasoning: switch-independent GIoU | Reasoning: switch-dependent CIoU | Reasoning: switch-dependent GIoU | Generic: switch-independent CIoU | Generic: switch-independent GIoU | Generic: switch-dependent CIoU | Generic: switch-dependent GIoU |
+| &nbsp;&nbsp;&nbsp;Model&nbsp;&nbsp;&nbsp; | Reasoning: switch-independent CIoU | Reasoning: switch-independent GIoU | Reasoning: switch-dependent CIoU | Reasoning: switch-dependent GIoU | Generic: switch-independent CIoU | Generic: switch-independent GIoU | Generic: switch-dependent CIoU | Generic: switch-dependent GIoU |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| [Original LISA (`xinlai/LISA-7B-v1`)](https://huggingface.co/xinlai/LISA-7B-v1) | 30.07 | 32.39 | 36.59 | 39.73 | 8.25 | 7.70 | 4.87 | 4.57 |
-| [Rail-finetuned LISA — semantic only](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-clip) | 66.23 | 66.15 | 56.95 | 57.97 | 65.92 | 66.03 | 57.21 | 58.18 |
-| [**Rail-finetuned LISA — semantic + reasoning**](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip) | **89.00** | **88.34** | **90.49** | **90.33** | 65.58 | 65.94 | 57.87 | 58.89 |
+| &nbsp;&nbsp;&nbsp;[Original&nbsp;LISA&nbsp;(`xinlai/LISA-7B-v1`)](https://huggingface.co/xinlai/LISA-7B-v1)&nbsp;&nbsp;&nbsp; | 30.07 | 32.39 | 36.59 | 39.73 | 8.25 | 7.70 | 4.87 | 4.57 |
+| &nbsp;&nbsp;&nbsp;[Rail-finetuned&nbsp;LISA&nbsp;—&nbsp;semantic&nbsp;only](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-clip)&nbsp;&nbsp;&nbsp; | 66.23 | 66.15 | 56.95 | 57.97 | 65.92 | 66.03 | 57.21 | 58.18 |
+| &nbsp;&nbsp;&nbsp;[**Rail&#8209;finetuned&nbsp;LISA&nbsp;—&nbsp;semantic&nbsp;+&nbsp;reasoning**](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip)&nbsp;&nbsp;&nbsp; | **89.00** | **88.34** | **90.49** | **90.33** | 65.58 | 65.94 | 57.87 | 58.89 |
 
 </div>
 
