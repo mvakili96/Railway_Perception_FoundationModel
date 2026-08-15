@@ -22,11 +22,17 @@ Prompts used:
 - **Reasoning-oriented:** `By examining rail continuity and switch geometry, segment the active ego-route the train is following in this image.`
 - **Generic:** `Segment the track bed in this image.`
 
+<div align="center">
+<sub>
+
 | Model | Reasoning: switch-independent CIoU | Reasoning: switch-independent GIoU | Reasoning: switch-dependent CIoU | Reasoning: switch-dependent GIoU | Generic: switch-independent CIoU | Generic: switch-independent GIoU | Generic: switch-dependent CIoU | Generic: switch-dependent GIoU |
-|---|---|---|---|---|---|---|---|---|
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | [Original LISA (`xinlai/LISA-7B-v1`)](https://huggingface.co/xinlai/LISA-7B-v1) | 30.07 | 32.39 | 36.59 | 39.73 | 8.25 | 7.70 | 4.87 | 4.57 |
 | [Rail-finetuned LISA — semantic only](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-clip) | 66.23 | 66.15 | 56.95 | 57.97 | 65.92 | 66.03 | 57.21 | 58.18 |
 | [**Rail-finetuned LISA — semantic + reasoning**](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip) | **89.00** | **88.34** | **90.49** | **90.33** | 65.58 | 65.94 | 57.87 | 58.89 |
+
+</sub>
+</div>
 
 CIoU is the sum of intersections divided by the sum of unions across a subset; GIoU is the mean of image-level IoU. Compared with semantic-only training, joint training gains 22.77/22.19 CIoU/GIoU points on switch-independent scenes and 33.53/32.35 on switch-dependent scenes; all paired-bootstrap 95% confidence intervals are above zero.
 
@@ -34,12 +40,18 @@ CIoU is the sum of intersections divided by the sum of unions across a subset; G
 
 Improvements over semantic-only finetuning from 10,000 paired image-level percentile-bootstrap resamples (95% confidence level, seed 2026):
 
+<div align="center">
+<sub>
+
 | Scene type | Metric | Difference (percentage points) | Paired-bootstrap 95% confidence interval |
-|---|---|---|---|
+|:---:|:---:|:---:|:---:|
 | Switch-independent | CIoU | +22.77 | [22.00, 23.53] |
 | Switch-independent | GIoU | +22.19 | [21.50, 22.89] |
 | Switch-dependent | CIoU | +33.53 | [31.10, 36.07] |
 | Switch-dependent | GIoU | +32.35 | [30.10, 34.68] |
+
+</sub>
+</div>
 
 ### Route-logic audit
 
@@ -49,20 +61,28 @@ A strict mask is correct only when the intended route has the highest IoU, inten
 
 **(a) Output-level correctness**
 
+<div align="center">
+
 | Assessment | Correct | Incorrect |
-|---|---|---|
+|:---:|:---:|:---:|
 | Strict mask criterion | 24 (80.0%) | 6 (20.0%) |
 | Switch type in rationale | 26 (86.7%) | 4 (13.3%) |
 | Active-route direction in rationale | 21 (70.0%) | 9 (30.0%) |
 | Switch type and direction jointly | 18 (60.0%) | 12 (40.0%) |
 
+</div>
+
 **(b) Paired mask–rationale outcomes**
 
+<div align="center">
+
 | Mask assessment | Type and direction correct | At least one incorrect | Total |
-|---|---|---|---|
+|:---:|:---:|:---:|:---:|
 | Correct | 13 | 11 | 24 |
 | Incorrect | 5 | 1 | 6 |
 | **Total** | **18** | **12** | **30** |
+
+</div>
 
 Evaluation notes:
 
@@ -128,11 +148,15 @@ The `v2` tag is mutable. A pinned image digest and complete environment manifest
 
 ### Model prerequisites
 
+<div align="center">
+
 | Workflow | Required checkpoint |
-|---|---|
+|:---:|:---:|
 | Original baseline and current finetuning (`--hf_merged_model`) | The authors' [`xinlai/LISA-7B-v1`](https://huggingface.co/xinlai/LISA-7B-v1) Hugging Face checkpoint. It is evaluated unchanged as **Original LISA** in the first Results table and initializes both railway-finetuned models. |
 | Initialization from backbones | A prepared LLaVA checkpoint following the [upstream LISA instructions](https://github.com/JIA-Lab-research/LISA#pre-trained-weights) and the [LLaVA model-preparation guidance](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md), plus the [SAM ViT-H checkpoint](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth) supplied through `--vision_pretrained`. |
 | Inference | Either public railway checkpoint—[semantic only](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-clip) or [semantic + reasoning](https://huggingface.co/m-vakili75/railway-lisa-7b-semantic-reasoning-clip)—downloaded as a complete folder with its `vision_tower/`. |
+
+</div>
 
 Download the exact LISA initialization/baseline snapshot used here:
 
@@ -191,8 +215,10 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 
 ## Reproducibility Status
 
+<div align="center">
+
 | Artifact | Status | Current availability |
-|---|---|---|
+|:---:|:---:|:---:|
 | Source code and README assets | **Available** | Included in this repository. |
 | Unit tests | **Available** | CPU tests cover reasoning-template parsing and counterfactual augmentation under [`tests/`](tests/); full GPU/model tests are not included. |
 | HPC workflows | **Available** | Two-node training, checkpoint merging, and batch-demo Slurm scripts are included as cluster-specific examples. |
@@ -207,6 +233,8 @@ The script's `bf16`, 1024-token context, and reasoning prompt are the current re
 | Evaluation and bootstrap scripts | **Available** | CIoU, GIoU, and paired-bootstrap comparisons are implemented in [`scripts/evaluation/`](scripts/evaluation/). |
 | Route-logic audit labels and evaluator | **Partial** | The balanced 30-image type/direction annotations are included; the strict branch-aware evaluator is still planned. |
 | Exact environment lock | **Planned** | The container is available, but its digest and a complete environment manifest are not yet recorded. |
+
+</div>
 
 The Slurm files contain paths from the original cluster and must be edited for a reader's storage, network, dataset, and checkpoint locations.
 
@@ -233,13 +261,17 @@ The reported result tables cannot yet be reproduced end to end from public artif
 
 The preparation commands below write directly to the locations used by the repository:
 
+<div align="center">
+
 | Split | Final location | Used by |
-|---|---|---|
+|:---:|:---:|:---:|
 | Semantic training | `dataset/RailSem19-SemSeg-LISA/` with images under `training/images/` and labels under `training/v2.0/labels/` | [`init_railsem`](utils/sem_seg_dataset.py) with `--dataset_dir=dataset --sem_seg_data=railsem` |
 | Reasoning training | `dataset/reason_seg/ReasonSegRail/` with `train/`, `explanatory/train.json`, and `weight_maps/` | [`ReasonSegDataset`](utils/reason_seg_dataset.py) with `--dataset_dir=dataset --reason_seg_rail_data='ReasonSegRail|train'` |
 | Validation | `dataset/reason_seg/ReasonSegRail/val/` with one `.jpg` and same-stem `.json` per sample | [`ValDataset`](utils/dataset.py) with `--dataset_dir=dataset --val_dataset='ReasonSegRail|val'` |
 | Test images | `dataset/test/images/` | [`demo_LISA.sbatch`](demo_LISA.sbatch) when `PROC_DATA="$PWD/dataset"` and `TEST_IMAGE_SUBDIR=test/images` |
 | Test ground truth | `dataset/test/rs19_egopath_1024.json` | [`evaluate_ego_path.py`](scripts/evaluation/evaluate_ego_path.py) through `--gt-json` |
+
+</div>
 
 The paths under `dataset/external/` are local staging locations for downloaded source files. They may be changed through the script arguments, but keep the generated files in the final locations above unless the corresponding loader or launcher arguments are also changed. The complete layout is shown under [Expected directory structure](#expected-directory-structure).
 
@@ -352,25 +384,33 @@ find dataset/test -maxdepth 2 -type f | sort | head
 
 ### Data composition and preprocessing
 
+<div align="center">
+
 | Data type (n) | RailSem19 source and selection | Input dimensions | Encoder-specific preprocessing |
-|---|---|---|---|
+|:---:|:---:|:---:|:---:|
 | **Semantic training (6,000)** | First 6,000 images; all included. | Unscaled 1024×1024 crops; horizontally centered, bottom-aligned | **CLIP:** shortest side to 224; 224×224 center crop; normalize.<br>**SAM:** normalize; no resizing or padding. |
 | **Reasoning: close-up (126)** | Qualifying switch scenes from images 1–4,000; annotated ego-path traverses a switch region whose configuration is visually discernible; per-image ROI retains the switch mechanism and relevant route geometry. | Width: 170–1266; height: 102–659 pixels | **CLIP:** shortest side to 224; 224×224 center crop; normalize.<br>**SAM:** if needed, resize the longest side down to 1024 while preserving aspect ratio; normalize; zero-pad to 1024×1024. Images are never upscaled. |
 | **Reasoning: wider context (116)** | Qualifying switch scenes from images 1–4,000 under the same visible-switch criterion; surrounding context retained. | 1024×1024 | **CLIP:** shortest side to 224; 224×224 center crop; normalize.<br>**SAM:** normalize; no resizing or padding. |
 | **Validation (500)** | RailSem19 images 8,001–8,500; held out from training. | Unscaled 1024×1024 crops; horizontally centered, bottom-aligned | **CLIP:** shortest side to 224; 224×224 center crop; normalize.<br>**SAM:** normalize; no resizing or padding. |
 | **Test (2,000)** | RailSem19 images 6,001–8,000; held out from training and validation. | Unscaled 1024×1024 crops; horizontally centered, bottom-aligned | **CLIP:** shortest side to 224; 224×224 center crop; normalize.<br>**SAM:** normalize; no resizing or padding. |
 
+</div>
+
 ### Reasoning-training distribution
 
 Counts are before stochastic counterfactual flipping.
 
+<div align="center">
+
 | Switch topology | Active ego-route | Close-up | Wider context | Total |
-|---|---|---|---|---|
+|:---:|:---:|:---:|:---:|:---:|
 | **Turnout** | Right | 42 | 33 | 75 |
 | **Turnout** | Left | 33 | 37 | 70 |
 | **Merge** | Right | 28 | 25 | 53 |
 | **Merge** | Left | 23 | 21 | 44 |
 | **Total** |  | **126** | **116** | **242** |
+
+</div>
 
 ### Expected directory structure
 
@@ -409,14 +449,18 @@ Counts are before stochastic counterfactual flipping.
 
 The arguments passed to [`train_ds.py`](train_ds.py) control the reusable model, data, and training behavior. Slurm resources, rank rendezvous, the `ens3f0np0` interface, container and bind sources, caches, logs, and W&B paths are cluster-specific; replace them and ensure that the target cluster assigns one GPU to each task.
 
+<div align="center">
+
 | Setting | Current reference behavior |
-|---|---|
+|:---:|:---:|
 | Schedule and batch | `--epochs=20` represents 20 sampled training/validation intervals, not 20 complete passes over the source files. Each interval has 50 optimizer updates. A per-GPU batch of 2 across 8 ranks with accumulation 1 gives an effective global batch of 16 and 1,000 updates in total. |
 | Sampling and responses | [`HybridDataset`](utils/dataset.py) independently samples the configured semantic or rail-reasoning stream with replacement using normalized `--sample_rates`. For reasoning images covered by the explanation manifest, `--explanatory=0.5` produces, in expectation, 50% rationale-only samples without mask loss, 25% mask-only samples, and 25% mask-plus-rationale samples ([loader logic](utils/reason_seg_dataset.py)). Exact draws and counterfactual flips are not replayable yet because no training seed is configured. |
 | Adaptation | LoRA uses rank 8, alpha 16, dropout 0.05, and `q_proj`/`v_proj` targets. The base learning rate is `1e-4`; the eight trainable CLIP blocks use `1e-5`. The selectively trained modules include the final 16 SAM blocks and the final eight CLIP blocks used by LLaVA, as summarized under [Model and Training](#model-and-training). |
 | Validation and checkpointing | Validation runs after every 50-update interval. `--val_dataset` selects the split; the launcher omits it and therefore inherits `ReasonSeg|val`, so set it explicitly for a different layout. Only an improvement in validation GIoU replaces `runs/<exp_name>/ckpt_model`; CIoU is reported but does not select the checkpoint. |
 | Monitoring | Rank 0 writes TensorBoard logs to `runs/<exp_name>`. W&B mirrors the training and validation metrics when `--use_wandb` is enabled, as it is in the reference launcher. Logged values include language and mask losses, ego-side loss, switch/right-blade token CE and accuracy, learning rates, timing, memory, CIoU, and GIoU. |
 | Reasoning probe | `--epoch_reasoning_inference` fixes a manifest-derived image subset before training, greedily generates rationales from the live distributed model after every interval, and writes per-image and summary JSON records to the Slurm log. It does not score masks and supports ZeRO stages 0–2 only; the reference uses ZeRO-2. |
+
+</div>
 
 ```bash
 # Edit the launcher’s cluster settings and placeholder model/data paths first.
@@ -430,8 +474,10 @@ Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded.
 
 [`merge_LISA.sbatch`](merge_LISA.sbatch) is the CPU-only export job. It first runs DeepSpeed's checkpoint-generated `zero_to_fp32.py` to combine the selected ZeRO shards into `fp32_model/pytorch_model.bin`. It then runs [`merge_lora_weights_and_save_hf_model.py`](merge_lora_weights_and_save_hf_model.py) to rebuild the base model, load that state, merge LoRA, and save the BF16 model, tokenizer, configuration, and tuned CLIP tower in `vision_tower/`.
 
+<div align="center">
+
 | Setting or argument | Purpose |
-|---|---|
+|:---:|:---:|
 | Slurm header and `IMG` | CPU/RAM/time/log settings and the Apptainer image. |
 | `PROC_CODE` and `PROC_CKPT` | Host directories bound to the code and checkpoint locations inside the container. |
 | Checkpoint working directory | The selected `runs/<exp_name>/ckpt_model`, including `latest`, its rank shards, and `zero_to_fp32.py`. |
@@ -439,6 +485,8 @@ Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded.
 | `--version` | The same base LISA model used for training. |
 | `--weight` | The consolidated `fp32_model/pytorch_model.bin`. |
 | `--save_path` | A new directory for the complete merged model. |
+
+</div>
 
 Edit those placeholders, then run:
 
@@ -497,13 +545,17 @@ The 11 CPU unit tests check structured-rationale token alignment and left/right 
 
 ### Troubleshooting
 
+<div align="center">
+
 | Symptom | Check and fix |
-|---|---|
+|:---:|:---:|
 | Missing configuration, tokenizer, or weights | `--version` must point to the root of a complete merged export—not `ckpt_model/`, `fp32_model/`, or one weight file. Check the path inside the container; the root needs its configuration, tokenizer, model weight file(s), and sibling `vision_tower/`. |
 | `Unknown vision tower` or CLIP load failure | Pass the exported tower through `--vision-tower`. Its directory needs CLIP configuration, weights, and processor configuration, and the current loader requires the full path string to contain `clip`. This explicit argument also overrides a stale absolute path saved during export. |
 | CUDA out of memory | Inference already processes folder images sequentially; use BF16, free competing GPU jobs, or use a larger GPU. For training, lower `--batch_size` and raise `--grad_accumulation_steps` if the effective batch must stay fixed. The available 4/8-bit modes are not validated for the final checkpoint. |
 | Distributed startup hangs or times out | Replace `ens3f0np0` consistently in `NCCL_SOCKET_IFNAME`, `GLOO_SOCKET_IFNAME`, and the master-address lookup with an IPv4 interface reachable from every node. Verify the printed address, port, world size, ranks, and one-GPU-per-task mapping. |
 | Rationale appears but no mask is saved | A mask is decoded only when the model generates `[SEG]`. Inspect `text_output`, use the documented prompt and `llava_v1` template, and verify that the merged model, tokenizer, and vision tower belong to the same export. Do not add `[SEG]` to the user prompt manually. |
+
+</div>
 
 ## Citation
 
