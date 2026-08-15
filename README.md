@@ -29,7 +29,7 @@ Prompts used:
 
 </div>
 
-Compared with semantic-only training, joint training gains 22.77/22.19 CIoU/GIoU points on switch-independent scenes and 33.53/32.35 on switch-dependent scenes; all paired-bootstrap 95% confidence intervals are above zero.
+Compared with semantic-only training, joint training gains 22.77/22.19 CIoU/GIoU points on switch-independent scenes and 33.53/32.35 on switch-dependent scenes. All paired-bootstrap 95% confidence intervals are above zero.
 
 ### Paired-bootstrap comparison
 
@@ -143,7 +143,7 @@ mkdir -p "$HOME/logs_LISA_demo"
 
 ## Inference
 
-[`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings; `IMG`, `PROC_CKPT`, `PROC_CODE`, `PROC_DATA`, `PROC_OUTPUT`, `MODEL_NAME`, `TEST_IMAGE_SUBDIR`, `RUN_NAME`, and `LISA_PROMPT` can be overridden through the job environment.
+[`demo_LISA.sbatch`](demo_LISA.sbatch) runs [`chat_batch.py`](chat_batch.py) on one GPU inside the project container. Before submission, replace its Slurm settings. `IMG`, `PROC_CKPT`, `PROC_CODE`, `PROC_DATA`, `PROC_OUTPUT`, `MODEL_NAME`, `TEST_IMAGE_SUBDIR`, `RUN_NAME`, and `LISA_PROMPT` can be overridden through the job environment.
 
 Download the released joint checkpoint:
 
@@ -191,33 +191,24 @@ The preparation commands below write directly to the locations used by the repos
 
 </div>
 
-The paths under `dataset/external/` are local staging locations for downloaded source files. They may be changed through the script arguments, but keep the generated files in the final locations above unless the corresponding loader or launcher arguments are also changed. The complete layout is shown under [Expected directory structure](#expected-directory-structure).
-
-### Prepare the semantic-training set
+### Semantic-training set
 
 Obtain the original RailSem19 intensity images and dense semantic label maps from the [official portal](https://www.wilddash.cc/download) under the [RailSem19 license](https://www.wilddash.cc/license/railsem19). Keep these downloads local under `dataset/external/railsem19/semantic/` and prepare the first 6,000 image/label pairs in filename order:
 
 - Apply the same centred, bottom-aligned 1024×1024 crop to each image and its dense mask: `x0 = (width - 1024) // 2`, `y0 = height - 1024`, then crop `[y0:height, x0:x0+1024]`.
 - Create an unsigned 8-bit label mask initialized to class `2` (**Background**). Set pixels whose original RailSem19 value is `15` (`trackbed`) to class `0` (**Track bed**) and pixels with value `12` (`rail-track`) to class `1` (**Rail**).
-- Save every crop as `training/images/<stem>.jpg` and its class-ID mask as `training/v2.0/labels/<stem>.png`. A single-channel PNG is sufficient; three equal channels are also accepted by the loader.
+- Save every crop as `training/images/<stem>.jpg` and its class-ID mask as `training/v2.0/labels/<stem>.png`. A single-channel PNG is sufficient. Three equal channels are also accepted by the loader.
 - Copy the provided [`config_v2.0.json`](scripts/data/templates/railsem19/config_v2.0.json) to the dataset root.
-
-```bash
-mkdir -p dataset/RailSem19-SemSeg-LISA/training/images \
-  dataset/RailSem19-SemSeg-LISA/training/v2.0/labels
-cp scripts/data/templates/railsem19/config_v2.0.json \
-  dataset/RailSem19-SemSeg-LISA/config_v2.0.json
-```
 
 The final layout must be `dataset/RailSem19-SemSeg-LISA/training/images/<stem>.jpg` and `training/v2.0/labels/<stem>.png`, with paired stems. This is the structure loaded by [`init_railsem`](utils/sem_seg_dataset.py) when using `--dataset_dir=dataset --sem_seg_data=railsem`.
 
 ### Reasoning-training set
 
-The 242 reasoning samples were manually selected from the first 4,000 RailSem19 images where the annotated ego-route crosses a switch whose configuration is visually clear. The set combines 126 manually cropped close-up views that retain the switch mechanism after CLIP preprocessing with 116 wider 1024×1024 views that preserve scene context. Each sample includes an ego-route polygon and five segmentation-prompt paraphrases; a companion manifest provides explanatory supervision describing switch topology, blade state, rail continuity, and the active route.
+The 242 reasoning samples were manually selected from the first 4,000 RailSem19 images where the annotated ego-route crosses a switch whose configuration is visually clear. The set combines 126 manually cropped close-up views that retain the switch mechanism after CLIP preprocessing with 116 wider 1024×1024 views that preserve scene context. Each sample includes an ego-route polygon and five segmentation-prompt paraphrases. A companion manifest provides explanatory supervision describing switch topology, blade state, rail continuity, and the active route.
 
-All samples are used for training; validation and testing use separate RailSem19 ranges. Place the requested package under `dataset/reason_seg/ReasonSegRail/` as shown below. The project-created reasoning annotations are available from the repository owner upon request; any accompanying RailSem19 material remains governed by the [RailSem19 license](https://www.wilddash.cc/license/railsem19).
+All samples are used for training. Place the requested package under `dataset/reason_seg/ReasonSegRail/` as shown below. The project-created reasoning annotations are available from the repository owner upon request. Any accompanying RailSem19 material remains governed by the [RailSem19 license](https://www.wilddash.cc/license/railsem19).
 
-### Prepare the validation set
+### Validation set
 
 Place only the 500 validation images (`rs08000.jpg`–`rs08499.jpg`) in `dataset/external/railsem19/validation_images/`, alongside the TEP-Net annotation download already used for the test set. First create the crops and shifted rail coordinates:
 
@@ -240,9 +231,9 @@ python scripts/data/generate_rs19_crop_jsons.py \
   --limit 500
 ```
 
-The included template is one complete anonymized annotation sample, including its original polygon coordinates. It supplies the `text`, `is_sentence`, and shape structure expected by [`get_mask_from_json`](utils/data_processing.py); for every validation image, the generator replaces the prompts, image name, and points, forming the target polygon from the right rail followed by the reversed left rail. The current validation loader uses the first generated prompt. Select this split with `--val_dataset='ReasonSegRail|val'`.
+The included template is one complete anonymized annotation sample, including its original polygon coordinates. It supplies the `text`, `is_sentence`, and shape structure expected by [`get_mask_from_json`](utils/data_processing.py). For every validation image, the generator replaces the prompts, image name, and points, forming the target polygon from the right rail followed by the reversed left rail. The current validation loader uses the first generated prompt. Select this split with `--val_dataset='ReasonSegRail|val'`.
 
-### Prepare the held-out test set
+### Test set
 
 Obtain `rs19_val.zip` from the [official RailSem19 portal](https://www.wilddash.cc/download) and `rs19_egopath.json` through the [TEP-Net repository](https://github.com/irtrailenium/train-ego-path-detection#ego-path-annotations-and-trained-model-weights). Place the annotation file and held-out images 6,001–8,000 in the paths shown under [Expected directory structure](#expected-directory-structure), then run inside the supported container:
 
@@ -258,21 +249,9 @@ Use new or empty output paths. The script creates centred, bottom-aligned 1024×
 
 ### Run the test experiment
 
-[`demo_LISA.sbatch`](demo_LISA.sbatch) runs inference on `dataset/test/images`. Set the checkpoint, prompt, and a unique output name:
+[`demo_LISA.sbatch`](demo_LISA.sbatch) runs inference on `dataset/test/images`. Set the checkpoint, prompt, and a unique output name.
 
-```bash
-IMG="$PWD/LISA.sif" \
-PROC_CODE="$PWD" \
-PROC_CKPT="/absolute/path/to/checkpoints" \
-PROC_DATA="$PWD/dataset" \
-PROC_OUTPUT="$PWD/outputs/test" \
-MODEL_NAME="railway-lisa-7b-semantic-reasoning-clip" \
-RUN_NAME="joint_reasoning" \
-LISA_PROMPT="By examining rail continuity and switch geometry, segment the active ego-route the train is following in this image." \
-sbatch demo_LISA.sbatch
-```
-
-Repeat for each checkpoint and the two prompts under [Results](#results). Masks are written to `outputs/test/<run-name>/masks/` as JPEGs using the tested `0/100` encoding. The evaluator preserves the original workflow by treating pixels decoded exactly as `100` as foreground, so use the masks produced by the supplied demo without re-encoding them.
+Repeat for each checkpoint and the two prompts under [Results](#results).
 
 Inside the container, evaluate one run or compare two prediction directories with the same tested calculations:
 
@@ -287,18 +266,9 @@ python scripts/evaluation/evaluate_ego_path.py \
   --audit-csv scripts/evaluation/metadata/route_logic_audit_30.csv
 ```
 
-Paired mode prints each method's CIoU/GIoU, their percentage-point differences, paired-bootstrap intervals, and the number of valid pairs. Single-model mode additionally prints mIoU, N-acc, individual confidence intervals, and audit-subset IoU/false-positive diagnostics. Metric values are fractions (`0.8900` corresponds to `89.00%`); paired differences are percentage points.
+[`route_logic_audit_30.csv`](scripts/evaluation/metadata/route_logic_audit_30.csv) contains the audit labels (`T/M`: turnout/merge; `R/L`: right/left). The current evaluator reads its `image_index` column to report the audit subset separately. All other valid predictions are reported as the remaining set. These groups do not reconstruct the full switch-dependent/switch-independent split in the Results tables.
 
-[`route_logic_audit_30.csv`](scripts/evaluation/metadata/route_logic_audit_30.csv) contains the audit labels (`T/M`: turnout/merge; `R/L`: right/left). The current evaluator reads its `image_index` column to report the audit subset separately; all other valid predictions are reported as the remaining set. These groups do not reconstruct the full switch-dependent/switch-independent split in the Results tables.
-
-The evaluator implements the segmentation metrics in the first Results table and the paired-bootstrap calculations in the second. Exact table reproduction also requires the original checkpoints, prompts, predictions, and complete scene split. It does **not** produce the third route-logic table: strict branch correctness and rationale type/direction scoring remain planned. Use `--mode single_model` for one prediction directory; comparison arguments are then ignored.
-
-Check the generated locations before running validation or inference:
-
-```bash
-find dataset/reason_seg/ReasonSegRail/val -maxdepth 1 -type f | sort | head
-find dataset/test -maxdepth 2 -type f | sort | head
-```
+The evaluator implements the segmentation metrics in the first Results table and the paired-bootstrap calculations in the second. Use `--mode single_model` for one prediction directory.
 
 ### Data composition and preprocessing
 
@@ -365,20 +335,7 @@ Counts are before stochastic counterfactual flipping.
 
 [`fine_tune_LISA_2nodes.sbatch`](fine_tune_LISA_2nodes.sbatch) is the current two-node launcher. Slurm starts four GPU tasks on each node, and every task runs one DeepSpeed rank inside the Apptainer container: eight ranks on eight NVIDIA L40 GPUs, using bfloat16 and ZeRO-2.
 
-The arguments passed to [`train_ds.py`](train_ds.py) control the reusable model, data, and training behavior. Slurm resources, rank rendezvous, the `ens3f0np0` interface, container and bind sources, caches, logs, and W&B paths are cluster-specific; replace them and ensure that the target cluster assigns one GPU to each task.
-
-<div align="center">
-
-| Setting | Current reference behavior |
-|:---:|:---:|
-| Schedule and batch | `--epochs=20` represents 20 sampled training/validation intervals, not 20 complete passes over the source files. Each interval has 50 optimizer updates. A per-GPU batch of 2 across 8 ranks with accumulation 1 gives an effective global batch of 16 and 1,000 updates in total. |
-| Sampling and responses | [`HybridDataset`](utils/dataset.py) independently samples the configured semantic or rail-reasoning stream with replacement using normalized `--sample_rates`. For reasoning images covered by the explanation manifest, `--explanatory=0.5` produces, in expectation, 50% rationale-only samples without mask loss, 25% mask-only samples, and 25% mask-plus-rationale samples ([loader logic](utils/reason_seg_dataset.py)). Exact draws and counterfactual flips are not replayable yet because no training seed is configured. |
-| Adaptation | LoRA uses rank 8, alpha 16, dropout 0.05, and `q_proj`/`v_proj` targets. The base learning rate is `1e-4`; the eight trainable CLIP blocks use `1e-5`. The selectively trained modules include the final 16 SAM blocks and the final eight CLIP blocks used by LLaVA, as summarized under [Model and Training](#model-and-training). |
-| Validation and checkpointing | Validation runs after every 50-update interval. `--val_dataset` selects the split; the launcher omits it and therefore inherits `ReasonSeg|val`, so set it explicitly for a different layout. Only an improvement in validation GIoU replaces `runs/<exp_name>/ckpt_model`; CIoU is reported but does not select the checkpoint. |
-| Monitoring | Rank 0 writes TensorBoard logs to `runs/<exp_name>`. W&B mirrors the training and validation metrics when `--use_wandb` is enabled, as it is in the reference launcher. Logged values include language and mask losses, ego-side loss, switch/right-blade token CE and accuracy, learning rates, timing, memory, CIoU, and GIoU. |
-| Reasoning probe | `--epoch_reasoning_inference` fixes a manifest-derived image subset before training, greedily generates rationales from the live distributed model after every interval, and writes per-image and summary JSON records to the Slurm log. It does not score masks and supports ZeRO stages 0–2 only; the reference uses ZeRO-2. |
-
-</div>
+The arguments passed to [`train_ds.py`](train_ds.py) control the reusable model, data, and training behavior. Slurm resources, rank rendezvous, the `ens3f0np0` interface, container and bind sources, caches, logs, and W&B paths are cluster-specific. Replace them and ensure that the target cluster assigns one GPU to each task.
 
 ```bash
 # Edit the launcher’s cluster settings and placeholder model/data paths first.
@@ -390,23 +347,7 @@ Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded.
 
 ### Convert and export
 
-[`merge_LISA.sbatch`](merge_LISA.sbatch) is the CPU-only export job. It first runs DeepSpeed's checkpoint-generated `zero_to_fp32.py` to combine the selected ZeRO shards into `fp32_model/pytorch_model.bin`. It then runs [`merge_lora_weights_and_save_hf_model.py`](merge_lora_weights_and_save_hf_model.py) to rebuild the base model, load that state, merge LoRA, and save the BF16 model, tokenizer, configuration, and tuned CLIP tower in `vision_tower/`.
-
-<div align="center">
-
-| Setting or argument | Purpose |
-|:---:|:---:|
-| Slurm header and `IMG` | CPU/RAM/time/log settings and the Apptainer image. |
-| `PROC_CODE` and `PROC_CKPT` | Host directories bound to the code and checkpoint locations inside the container. |
-| Checkpoint working directory | The selected `runs/<exp_name>/ckpt_model`, including `latest`, its rank shards, and `zero_to_fp32.py`. |
-| `--max_shard_size` | Keeps the consolidated state in the single file expected by the exporter; the reference uses `100GB`. |
-| `--version` | The same base LISA model used for training. |
-| `--weight` | The consolidated `fp32_model/pytorch_model.bin`. |
-| `--save_path` | A new directory for the complete merged model. |
-
-</div>
-
-Edit those placeholders, then run:
+Edit the placeholders, then run:
 
 ```bash
 sbatch merge_LISA.sbatch
@@ -414,39 +355,7 @@ sbatch merge_LISA.sbatch
 
 Keep the entire output directory together because the root weights do not duplicate the saved CLIP tower. When moving it, pass its local `vision_tower/` explicitly as documented under [Inference](#inference).
 
-## Repository Map and Validation
-
-The map lists the maintained entry points and rail-specific code; vendored LLaVA and SAM internals are grouped.
-
-```text
-.
-├── train_ds.py                              # training, validation, and monitoring
-├── chat_batch.py                            # single-image and folder inference
-├── merge_lora_weights_and_save_hf_model.py  # merged checkpoint export
-├── fine_tune_LISA_2nodes.sbatch             # two-node training launcher
-├── demo_LISA.sbatch                         # one-GPU inference launcher
-├── merge_LISA.sbatch                        # CPU checkpoint conversion/export
-├── scripts/
-│   ├── data/
-│   │   ├── prepare_rs19_test_set.py         # image/annotation crops
-│   │   └── generate_rs19_crop_jsons.py      # per-image validation JSONs
-│   └── evaluation/
-│       ├── evaluate_ego_path.py             # CIoU/GIoU and paired bootstrap
-│       └── metadata/                         # route-logic audit labels
-├── model/
-│   ├── LISA.py                              # adapted model and losses
-│   ├── llava/                               # LLaVA/CLIP stack
-│   └── segment_anything/                    # SAM stack
-├── utils/
-│   ├── dataset.py                           # sampling, collation, and validation
-│   ├── sem_seg_dataset.py                   # railway semantic loader
-│   ├── reason_seg_dataset.py                # railway reasoning loader
-│   ├── rail_reasoning.py                    # rationale parsing and token weights
-│   └── rail_augmentation.py                 # left/right counterfactual transforms
-├── tests/                                   # CPU logic tests
-└── docs/readme/                             # README figures and sources
-```
-
+## Repository Validation
 ### Validation commands
 
 Run these from the repository root inside the supported container:
@@ -459,7 +368,7 @@ bash -n demo_LISA.sbatch fine_tune_LISA_2nodes.sbatch merge_LISA.sbatch
 git diff --check
 ```
 
-The 11 CPU unit tests check structured-rationale token alignment and left/right counterfactual transforms. They do not load a model, train, convert checkpoints, measure segmentation quality, or run inference. Full model checks require the container, an NVIDIA GPU, and external checkpoints; end-to-end training/evaluation also requires the railway data.
+The 11 CPU unit tests check structured-rationale token alignment and left/right counterfactual transforms. They do not load a model, train, convert checkpoints, measure segmentation quality, or run inference.
 
 ### Troubleshooting
 
@@ -503,10 +412,10 @@ If this repository is useful for your work, please cite the [published paper](ht
 
 ## Credits
 
-This project adapts [LISA](https://github.com/JIA-Lab-research/LISA), built with [LLaVA](https://github.com/haotian-liu/LLaVA) and [Segment Anything (SAM)](https://github.com/facebookresearch/segment-anything). [RailSem19](https://openaccess.thecvf.com/content_CVPRW_2019/html/Autonomous_Driving/Zendel_RailSem19_A_Dataset_for_Semantic_Rail_Scene_Understanding_CVPRW_2019_paper.html) provides the source railway imagery and semantic labels. Switch rationales and reasoning masks were annotated for this project; evaluation ego-path ground truth derives from the RailSem19 extension introduced with [TEP-Net](https://arxiv.org/abs/2403.13094).
+This project adapts [LISA](https://github.com/JIA-Lab-research/LISA), built with [LLaVA](https://github.com/haotian-liu/LLaVA) and [Segment Anything (SAM)](https://github.com/facebookresearch/segment-anything). [RailSem19](https://openaccess.thecvf.com/content_CVPRW_2019/html/Autonomous_Driving/Zendel_RailSem19_A_Dataset_for_Semantic_Rail_Scene_Understanding_CVPRW_2019_paper.html) provides the source railway imagery and semantic labels. Switch rationales and reasoning masks were annotated for this project. Evaluation ego-path ground truth derives from the RailSem19 extension introduced with [TEP-Net](https://arxiv.org/abs/2403.13094).
 
 ## License
 
-Unless otherwise noted, repository code is licensed under the [Apache License 2.0](LICENSE). Third-party code and model weights retain their upstream terms; LLaVA-derived checkpoints may also inherit the base language model's license.
+Unless otherwise noted, repository code is licensed under the [Apache License 2.0](LICENSE). Third-party code and model weights retain their upstream terms. LLaVA-derived checkpoints may also inherit the base language model's license.
 
-RailSem19 is not covered by this repository's license. Raw source data is not bundled; the qualitative result figure contains six derived visualizations based on RailSem19 frames, which remain subject to the [RailSem19 license agreement](https://www.wilddash.cc/license/railsem19) and are not a substitute for the dataset. That agreement applies separate terms to imagery, dense metadata, and sparse metadata. The TEP-Net `rs19_egopath.json` annotation file is distributed upstream under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/); downloaded annotations and the derived crop-coordinate JSON remain local and are not relicensed by this repository. The included audit CSV contains project-created labels only—not image pixels or TEP-Net rail coordinates.
+RailSem19 is not covered by this repository's license. Raw source data is not bundled. The qualitative result figure contains six derived visualizations based on RailSem19 frames, which remain subject to the [RailSem19 license agreement](https://www.wilddash.cc/license/railsem19) and are not a substitute for the dataset. That agreement applies separate terms to imagery, dense metadata, and sparse metadata. The TEP-Net `rs19_egopath.json` annotation file is distributed upstream under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Downloaded annotations and the derived crop-coordinate JSON remain local and are not relicensed by this repository. The included audit CSV contains project-created labels only—not image pixels or TEP-Net rail coordinates.
