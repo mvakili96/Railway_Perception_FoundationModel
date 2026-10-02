@@ -1,4 +1,5 @@
 import argparse
+import gc
 import json
 import os
 import re
@@ -38,6 +39,88 @@ def init_wandb(args):
 def wandb_log(wandb_run, metrics, step):
     if wandb_run is not None:
         wandb_run.log(metrics, step=step)
+
+
+def _read_latest_checkpoint_tag(save_dir):
+    latest_path = os.path.join(save_dir, "latest")
+    if not os.path.isfile(latest_path):
+        return None
+    with open(latest_path, "r") as latest_file:
+        tag = latest_file.read().strip()
+    if not re.fullmatch(r"global_step\d+", tag):
+        raise RuntimeError(
+            f"Refusing to manage unexpected DeepSpeed checkpoint tag: {tag!r}"
+        )
+    return tag
+
+
+def save_deepspeed_checkpoint_safely(
+    model_engine,
+    save_dir,
+    epoch,
+    best_score,
+    cur_ciou,
+    args,
+):
+    """Save a ZeRO checkpoint without deleting the last valid checkpoint first."""
+    target_tag = f"global_step{int(model_engine.global_steps)}"
+    previous_tag = None
+
+    # Force any asynchronous CUDA failure to surface before touching the last
+    # usable checkpoint. Releasing cached validation allocations also gives the
+    # checkpoint path maximum headroom.
+    torch.cuda.synchronize(device=args.local_rank)
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    if args.is_main_process:
+        previous_tag = _read_latest_checkpoint_tag(save_dir)
+        target_path = os.path.join(save_dir, target_tag)
+        if target_tag != previous_tag and os.path.isdir(target_path):
+            # A failed earlier attempt may have left this tag incomplete. The
+            # tag referenced by `latest` is never removed before a new save.
+            shutil.rmtree(target_path)
+    torch.distributed.barrier()
+
+    checkpoint_saved = model_engine.save_checkpoint(
+        save_dir,
+        tag=target_tag,
+        client_state={
+            "epoch": epoch,
+            "best_score": best_score,
+            "cur_ciou": cur_ciou,
+        },
+    )
+    if checkpoint_saved is False:
+        raise RuntimeError(
+            f"DeepSpeed reported a failed checkpoint save for {target_tag}"
+        )
+
+    # DeepSpeed updates `latest` only after every rank has completed its save.
+    # Rotate the old tag afterward so a failed new save remains recoverable.
+    if args.is_main_process:
+        committed_tag = _read_latest_checkpoint_tag(save_dir)
+        if committed_tag != target_tag:
+            raise RuntimeError(
+                "DeepSpeed checkpoint commit did not update latest: "
+                f"expected {target_tag!r}, found {committed_tag!r}"
+            )
+        if previous_tag is not None and previous_tag != target_tag:
+            previous_path = os.path.join(save_dir, previous_tag)
+            if os.path.isdir(previous_path):
+                shutil.rmtree(previous_path)
+        torch.save(
+            {"epoch": epoch},
+            os.path.join(
+                args.log_dir,
+                "meta_log_giou{:.3f}_ciou{:.3f}.pth".format(
+                    best_score,
+                    cur_ciou,
+                ),
+            ),
+        )
+    torch.distributed.barrier()
+    return target_tag
 
 _sig = inspect.signature(torch.nn.Module.register_forward_pre_hook)
 if ('prepend' not in _sig.parameters) or ('with_kwargs' not in _sig.parameters):
@@ -761,6 +844,36 @@ def parse_args(args):
     parser.add_argument("--eval_only", action="store_true", default=False)
     parser.add_argument("--vision_pretrained", default="PATH_TO_SAM_ViT-H", type=str)
     parser.add_argument("--out_dim", default=256, type=int)
+    parser.add_argument(
+        "--seg_prompt_bridge_type",
+        default=None,
+        choices=["single", "four_query"],
+        help=(
+            "Language-to-SAM bridge. Omit to preserve a saved checkpoint's "
+            "setting, or fall back to the legacy single-[SEG] bridge."
+        ),
+    )
+    parser.add_argument(
+        "--seg_query_num_heads",
+        default=None,
+        type=int,
+        help="Attention heads in the four-query bridge (default: 8).",
+    )
+    parser.add_argument(
+        "--seg_query_num_hidden_layers",
+        default=None,
+        type=int,
+        help="Number of evenly spaced LLaMA layers used by the bridge (default: 4).",
+    )
+    parser.add_argument(
+        "--seg_bridge_numerics_debug",
+        action="store_true",
+        default=False,
+        help=(
+            "Fail at the first non-finite four-query/SAM tensor and report its "
+            "stage, rank, shape, dtype, NaN/Inf counts, and finite range."
+        ),
+    )
     parser.add_argument("--resume", default="", type=str)
     parser.add_argument("--print_freq", default=1, type=int)
     parser.add_argument(
@@ -859,6 +972,15 @@ def parse_args(args):
 
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
     parser.add_argument("--auto_resume", action="store_true", default=True)
+    parser.add_argument(
+        "--zero_offload_optimizer",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep ZeRO optimizer partitions on CPU. This avoids copying the "
+            "optimizer checkpoint from CUDA during torch.save."
+        ),
+    )
     parser.add_argument(
         "--conv_type",
         default="llava_v1",
@@ -961,6 +1083,14 @@ def main(args):
         "vision_tower": args.vision_tower,
         "use_mm_start_end": args.use_mm_start_end,
     }
+    if args.seg_prompt_bridge_type is not None:
+        model_args["seg_prompt_bridge_type"] = args.seg_prompt_bridge_type
+    if args.seg_query_num_heads is not None:
+        model_args["seg_query_num_heads"] = args.seg_query_num_heads
+    if args.seg_query_num_hidden_layers is not None:
+        model_args["seg_query_num_hidden_layers"] = (
+            args.seg_query_num_hidden_layers
+        )
     torch_dtype = torch.float32
     if args.precision == "bf16":
         torch_dtype = torch.bfloat16
@@ -969,6 +1099,7 @@ def main(args):
     model = LISAForCausalLM.from_pretrained(
         args.version, torch_dtype=torch_dtype, low_cpu_mem_usage=True, **model_args
     )
+    model.seg_bridge_numerics_debug = args.seg_bridge_numerics_debug
 
     if args.hf_merged_model:
         model.ce_loss_weight   = args.ce_loss_weight
@@ -1005,7 +1136,24 @@ def main(args):
     # Skip this when starting from a merged HF model to avoid overwriting.
     if (not args.hf_merged_model) and (not args.eval_only):
         model.get_model().initialize_lisa_modules(model.get_model().config)
+        if model.config.seg_prompt_bridge_type == "four_query":
+            model._seg_query_bridge_load_status = (
+                "initialized_after_lisa_module_setup"
+            )
     # --- END INIT BLOCK ---
+
+    if model.config.seg_prompt_bridge_type == "four_query":
+        # This runs after every possible LISA-module construction and before
+        # PEFT/DeepSpeed. It prevents invalid bridge storage from reaching the
+        # first distributed forward pass.
+        model.get_model().seg_query_bridge.validate_parameters()
+        if args.is_main_process:
+            print(
+                "[four-query bridge startup] status={}".format(
+                    model._seg_query_bridge_load_status
+                ),
+                flush=True,
+            )
 
 
 
@@ -1036,6 +1184,7 @@ def main(args):
                                 "vision_tower",
                                 "mm_projector",
                                 "text_hidden_fcs",
+                                "seg_query_bridge",
                             ]
                         ]
                     )
@@ -1114,6 +1263,7 @@ def main(args):
         "embed_tokens",
         "mask_decoder",
         "text_hidden_fcs",
+        "seg_query_bridge",
         "heatmap_head",
     ]
     for n, p in model.named_parameters():
@@ -1278,6 +1428,16 @@ def main(args):
             "allgather_bucket_size": 2e5,
         },
     }
+    if args.zero_offload_optimizer:
+        ds_config["zero_optimization"]["offload_optimizer"] = {
+            "device": "cpu",
+            "pin_memory": True,
+        }
+        if args.is_main_process:
+            print(
+                "[DeepSpeed] ZeRO optimizer offload enabled for checkpoint-safe CPU state",
+                flush=True,
+            )
     model_engine, optimizer, train_loader, scheduler = deepspeed.initialize(
         model=model,
         model_parameters=optimizer_param_groups,
@@ -1378,20 +1538,14 @@ def main(args):
         checkpoint_saved = False
         if will_save:
             save_dir = os.path.join(args.log_dir, "ckpt_model")
-            if args.is_main_process:
-                torch.save(
-                    {"epoch": epoch},
-                    os.path.join(
-                        args.log_dir,
-                        "meta_log_giou{:.3f}_ciou{:.3f}.pth".format(
-                            best_score, cur_ciou
-                        ),
-                    ),
-                )
-                if os.path.exists(save_dir):
-                    shutil.rmtree(save_dir, ignore_errors=True)
-            torch.distributed.barrier()
-            model_engine.save_checkpoint(save_dir)
+            save_deepspeed_checkpoint_safely(
+                model_engine=model_engine,
+                save_dir=save_dir,
+                epoch=epoch,
+                best_score=best_score,
+                cur_ciou=cur_ciou,
+                args=args,
+            )
             checkpoint_saved = True
 
         if args.epoch_reasoning_inference:
@@ -1531,6 +1685,35 @@ def train(
             mask_bce_loss = output_dict["mask_bce_loss"]
             mask_dice_loss = output_dict["mask_dice_loss"]
             mask_loss = output_dict["mask_loss"]
+
+            nonfinite_losses = {
+                name: value
+                for name, value in {
+                    "loss": loss,
+                    "ce_loss": ce_loss,
+                    "switch_ce": switch_ce,
+                    "right_state_ce": right_state_ce,
+                    "rail_ego_side_loss": rail_ego_side_loss,
+                    "mask_loss": mask_loss,
+                    "mask_bce_loss": mask_bce_loss,
+                    "mask_dice_loss": mask_dice_loss,
+                }.items()
+                if not torch.isfinite(value).all()
+            }
+            if nonfinite_losses:
+                image_names = [
+                    os.path.basename(path)
+                    for path in input_dict.get("image_paths", [])
+                ]
+                raise FloatingPointError(
+                    "Non-finite loss before backward on rank {} at step {} "
+                    "for images {}: {}".format(
+                        args.global_rank,
+                        global_step,
+                        image_names,
+                        ", ".join(nonfinite_losses.keys()),
+                    )
+                )
 
             losses.update(loss.item(), input_dict["images"].size(0))
             ce_losses.update(ce_loss.item(), input_dict["images"].size(0))
@@ -1769,4 +1952,3 @@ def validate(val_loader, model_engine, epoch, writer, args, wandb_run):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
-

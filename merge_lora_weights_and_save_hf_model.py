@@ -32,6 +32,27 @@ def parse_args(args):
     )
     parser.add_argument("--vision_pretrained", default="PATH_TO_SAM_ViT-H", type=str)
     parser.add_argument("--out_dim", default=256, type=int)
+    parser.add_argument(
+        "--seg_prompt_bridge_type",
+        default=None,
+        choices=["single", "four_query"],
+        help=(
+            "Bridge used by the training checkpoint. Omit to preserve the "
+            "base config, which defaults old checkpoints to single-[SEG]."
+        ),
+    )
+    parser.add_argument(
+        "--seg_query_num_heads",
+        default=None,
+        type=int,
+        help="Attention heads in the four-query bridge (default: 8).",
+    )
+    parser.add_argument(
+        "--seg_query_num_hidden_layers",
+        default=None,
+        type=int,
+        help="Number of LLaMA layers used by the four-query bridge (default: 4).",
+    )
     parser.add_argument("--image_size", default=1024, type=int, help="image size")
     parser.add_argument("--model_max_length", default=1024, type=int)
     parser.add_argument(
@@ -83,6 +104,14 @@ def main(args):
         "seg_token_idx": args.seg_token_idx,
         "vision_tower": args.vision_tower,
     }
+    if args.seg_prompt_bridge_type is not None:
+        model_args["seg_prompt_bridge_type"] = args.seg_prompt_bridge_type
+    if args.seg_query_num_heads is not None:
+        model_args["seg_query_num_heads"] = args.seg_query_num_heads
+    if args.seg_query_num_hidden_layers is not None:
+        model_args["seg_query_num_hidden_layers"] = (
+            args.seg_query_num_hidden_layers
+        )
 
     torch_dtype = torch.float32
     if args.precision == "bf16":
@@ -118,6 +147,7 @@ def main(args):
                                 "vision_tower",
                                 "mm_projector",
                                 "text_hidden_fcs",
+                                "seg_query_bridge",
                             ]
                         ]
                     )
@@ -151,6 +181,12 @@ def main(args):
             print("Dropping training-only key not present in merge model:", key)
             state_dict.pop(key)
     model.load_state_dict(state_dict, strict=True)
+
+    if model.config.seg_prompt_bridge_type == "four_query":
+        # The training checkpoint must replace the temporary bridge built from
+        # an older base model, and every loaded parameter must be numerically
+        # valid before it is saved into the merged HF checkpoint.
+        model.get_model().seg_query_bridge.validate_parameters()
 
     model = model.merge_and_unload()
 

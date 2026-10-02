@@ -34,6 +34,7 @@ apptainer exec \
 
     CUDA_VISIBLE_DEVICES="" python3 merge_lora_weights_and_save_hf_model.py \
       --version="/workspace/checkpoints/LISA-7B-v1" \
+      --seg_prompt_bridge_type=four_query \
       --weight="/workspace/home/runs/lisa-7b-merged/fp32_model/pytorch_model.bin" \
       --save_path="/workspace/checkpoints/LISA-7B-debug-clip-${SLURM_JOB_ID}"
 

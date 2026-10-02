@@ -4,7 +4,9 @@
 #SBATCH --qos=gpu8-4h
 #SBATCH --account=research
 #SBATCH --nodes=2
-#SBATCH --exclude=lse-hpcnode14
+# Node 5 failed CUDA/NVML initialization on all four local ranks in job
+# 149029. Keep it out of the allocation while the cluster issue is investigated.
+#SBATCH --exclude=lse-hpcnode5,lse-hpcnode14
 #SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
@@ -116,6 +118,8 @@ srun \
     --dice_loss_weight=1.0 \
     --bce_loss_weight=2.0 \
     --ce_loss_weight=1 \
+    --seg_prompt_bridge_type=four_query \
+    --seg_bridge_numerics_debug \
     --rail_ego_side_loss_weight=3.0 \
     --use_rail_reasoning_weighted_ce \
     --lr 0.0001 \

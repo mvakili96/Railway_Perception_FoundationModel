@@ -345,7 +345,7 @@ The arguments passed to [`train_ds.py`](train_ds.py) control the reusable model,
 sbatch fine_tune_LISA_2nodes.sbatch
 ```
 
-Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded. Use a new `--exp_name` when starting a clean run.
+Automatic resume is enabled: an existing `runs/<exp_name>/ckpt_model` is loaded. Checkpoint rotation keeps the previous committed DeepSpeed tag until its replacement has saved successfully. Use a new `--exp_name` when starting a clean run.
 
 ### Convert and export
 
