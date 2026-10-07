@@ -1011,6 +1011,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         original_size_list,
         max_new_tokens=32,
         tokenizer=None,
+        do_sample=None,
     ):
         with torch.no_grad():
             pad_token_id = self.config.pad_token_id
@@ -1028,6 +1029,7 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 max_new_tokens=max_new_tokens,
                 num_beams=1,
                 return_dict_in_generate=True,
+                **({"do_sample": do_sample} if do_sample is not None else {}),
             )
             output_ids = outputs.sequences
 

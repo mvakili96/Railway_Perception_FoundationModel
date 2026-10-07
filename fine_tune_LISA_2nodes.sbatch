@@ -137,8 +137,9 @@ srun \
     --clip_lr=0.00001 \
     --rail_counterfactual_flip_prob=0.5 \
     --explanatory=0.5 \
-    --epoch_reasoning_inference \
-    --epoch_reasoning_json=/workspace/datasets/demo_dataset/reason_seg/ReasonSegRail/explanatory/train.json \
+    --epoch_switch_validation \
+    --epoch_switch_validation_json=/workspace/datasets/demo_dataset/reason_seg/ReasonSeg/explanatory/val_switch_labels.json \
+    --epoch_switch_validation_max_new_tokens=256 \
     --use_wandb \
     --wandb_project=lisa-rail \
     --wandb_name=lisa-7b-${SLURM_JOB_ID} \

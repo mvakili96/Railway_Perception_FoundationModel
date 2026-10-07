@@ -187,7 +187,7 @@ The preparation commands below write directly to the locations used by the repos
 |:---:|:---:|:---:|
 | Semantic training | `dataset/RailSem19-SemSeg-LISA/` with images under `training/images/` and labels under `training/v2.0/labels/` | [`init_railsem`](utils/sem_seg_dataset.py) with `--dataset_dir=dataset --sem_seg_data=railsem` |
 | Reasoning training | `dataset/reason_seg/ReasonSegRail/` with `train/`, `explanatory/train.json`, and `weight_maps/` | [`ReasonSegDataset`](utils/reason_seg_dataset.py) with `--dataset_dir=dataset --reason_seg_rail_data='ReasonSegRail|train'` |
-| Validation | `dataset/reason_seg/ReasonSegRail/val/` with one `.jpg` and same-stem `.json` per sample | [`ValDataset`](utils/dataset.py) with `--dataset_dir=dataset --val_dataset='ReasonSegRail|val'` |
+| Validation | `dataset/reason_seg/ReasonSeg/val/` with one `.jpg` and same-stem `.json` per sample | [`ValDataset`](utils/dataset.py) with `--dataset_dir=dataset` and the default `--val_dataset='ReasonSeg|val'` |
 | Test images | `dataset/test/images/` | [`demo_LISA.sbatch`](demo_LISA.sbatch) when `PROC_DATA="$PWD/dataset"` and `TEST_IMAGE_SUBDIR=test/images` |
 | Test ground truth | `dataset/test/rs19_egopath_1024.json` | [`evaluate_ego_path.py`](scripts/evaluation/evaluate_ego_path.py) through `--gt-json` |
 
@@ -219,7 +219,7 @@ mkdir -p dataset/metadata
 python scripts/data/prepare_rs19_test_set.py \
   --input-json dataset/external/tepnet/egopath/rs19_egopath.json \
   --image-dir dataset/external/railsem19/validation_images \
-  --output-dir dataset/reason_seg/ReasonSegRail/val \
+  --output-dir dataset/reason_seg/ReasonSeg/val \
   --output-json dataset/metadata/rs19_validation_egopath_1024.json
 ```
 
@@ -227,13 +227,13 @@ Then generate the per-image validation JSON beside each crop:
 
 ```bash
 python scripts/data/generate_rs19_crop_jsons.py \
-  --image-dir dataset/reason_seg/ReasonSegRail/val \
+  --image-dir dataset/reason_seg/ReasonSeg/val \
   --egopath-json dataset/metadata/rs19_validation_egopath_1024.json \
   --template-json scripts/data/templates/reason_seg_validation_template.json \
   --limit 500
 ```
 
-The included template is one complete anonymized annotation sample, including its original polygon coordinates. It supplies the `text`, `is_sentence`, and shape structure expected by [`get_mask_from_json`](utils/data_processing.py). For every validation image, the generator replaces the prompts, image name, and points, forming the target polygon from the right rail followed by the reversed left rail. The current validation loader uses the first generated prompt. Select this split with `--val_dataset='ReasonSegRail|val'`.
+The included template is one complete anonymized annotation sample, including its original polygon coordinates. It supplies the `text`, `is_sentence`, and shape structure expected by [`get_mask_from_json`](utils/data_processing.py). For every validation image, the generator replaces the prompts, image name, and points, forming the target polygon from the right rail followed by the reversed left rail. The current validation loader uses the first generated prompt and defaults to `ReasonSeg|val`.  
 
 ### Test set
 
@@ -321,9 +321,11 @@ Counts are before stochastic counterfactual flipping.
 │   │   └── rs19_egopath_1024.json
 │   ├── reason_seg/ReasonSegRail
 │   │   ├── train
-│   │   ├── val
 │   │   ├── explanatory/train.json
 │   │   └── weight_maps
+│   ├── reason_seg/ReasonSeg
+│   │   ├── val
+│   │   └── explanatory/val_switch_labels.json
 │   ├── RailSem19-SemSeg-LISA
 │   │   ├── config_v2.0.json
 │   │   └── training

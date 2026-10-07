@@ -142,10 +142,18 @@ from transformers import CLIPImageProcessor
 from model.LISA import LISAForCausalLM
 from model.llava import conversation as conversation_lib
 from model.llava.mm_utils import tokenizer_image_token
+from model.segment_anything.utils.transforms import ResizeLongestSide
 from utils.dataset import HybridDataset, ValDataset, collate_fn
 from utils.rail_reasoning import (
     RAIL_REASONING_DECISION_GROUP_WEIGHTS,
     RAIL_REASONING_DECISION_PATTERN,
+)
+from utils.rail_switch_validation import (
+    SWITCH_VALIDATION_PROMPT,
+    parse_switch_validation_answer,
+    resolve_switch_validation_manifest,
+    summarize_switch_validation,
+    switch_validation_wandb_metrics,
 )
 from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          DEFAULT_IMAGE_TOKEN, IGNORE_INDEX, AverageMeter,
@@ -686,6 +694,175 @@ def run_epoch_reasoning_inference(
     return results
 
 
+def run_epoch_switch_validation(
+    model_engine,
+    tokenizer,
+    clip_image_processor,
+    manifest,
+    manifest_path,
+    epoch,
+    checkpoint_saved,
+    args,
+    writer,
+    wandb_run,
+    val_metrics=None,
+):
+    """Generate answers and SAM masks from the current epoch's live weights."""
+    distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    rank = torch.distributed.get_rank() if distributed else args.global_rank
+    world_size = torch.distributed.get_world_size() if distributed else 1
+    if distributed:
+        torch.distributed.barrier()
+    zero_stage_attr = getattr(model_engine, "zero_optimization_stage", None)
+    zero_stage = zero_stage_attr() if callable(zero_stage_attr) else zero_stage_attr
+    if zero_stage is not None and int(zero_stage) >= 3:
+        raise RuntimeError("Switch validation supports ZeRO stages 0-2 only")
+
+    live_model = model_engine.module
+    evaluation_model = (
+        live_model.get_base_model() if hasattr(live_model, "get_base_model") else live_model
+    )
+    was_training = live_model.training
+    device = torch.device("cuda", args.local_rank)
+    image_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.precision]
+    prompt_ids = tokenizer_image_token(
+        build_epoch_reasoning_prompt(args), tokenizer, return_tensors="pt"
+    ).unsqueeze(0).to(device=device)
+    transform = ResizeLongestSide(args.image_size, allow_upscale=False)
+    pixel_mean = ValDataset.pixel_mean.to(device=device)
+    pixel_std = ValDataset.pixel_std.to(device=device)
+    output_dir = os.path.join(args.log_dir, "val_switch", "epoch_{:04d}".format(epoch + 1))
+    mask_dir = os.path.join(output_dir, "masks")
+    os.makedirs(mask_dir, exist_ok=True)
+    local_manifest = manifest[rank::world_size]
+    local_results = []
+    model_engine.eval()
+    try:
+        with torch.inference_mode():
+            for sample in local_manifest:
+                result = {
+                    "image": sample["image"],
+                    "image_index": sample["image_index"],
+                    "expected_switch": sample["switch"],
+                    "expected_direction": sample["direction"],
+                    "rank": rank,
+                }
+                error_stage = "read_image"
+                try:
+                    image_np = cv2.imread(sample["image_path"])
+                    if image_np is None:
+                        raise ValueError("Could not read {}".format(sample["image_path"]))
+                    image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+                    original_size = image_np.shape[:2]
+                    error_stage = "preprocess"
+                    image_clip = clip_image_processor.preprocess(
+                        image_np, return_tensors="pt"
+                    )["pixel_values"].to(device=device, dtype=image_dtype)
+                    sam_rgb = transform.apply_image(image_np)
+                    resize = sam_rgb.shape[:2]
+                    sam_image = torch.from_numpy(sam_rgb).permute(2, 0, 1).contiguous()
+                    sam_image = sam_image.to(device=device, dtype=torch.float32)
+                    sam_image = (sam_image - pixel_mean) / pixel_std
+                    sam_image = torch.nn.functional.pad(
+                        sam_image,
+                        (0, ValDataset.img_size - resize[1], 0, ValDataset.img_size - resize[0]),
+                    ).unsqueeze(0).to(dtype=image_dtype)
+                    error_stage = "evaluate"
+                    output_ids, pred_masks = evaluation_model.evaluate(
+                        images_clip=image_clip,
+                        images=sam_image,
+                        input_ids=prompt_ids,
+                        resize_list=[resize],
+                        original_size_list=[original_size],
+                        max_new_tokens=args.epoch_switch_validation_max_new_tokens,
+                        do_sample=False,
+                    )
+                    generated_ids = output_ids[0, prompt_ids.shape[1]:]
+                    if generated_ids.lt(0).any():
+                        raise ValueError("Generated suffix contains a negative token ID")
+                    result["prediction"] = tokenizer.decode(
+                        generated_ids, skip_special_tokens=True
+                    ).strip()
+                    parsed = parse_switch_validation_answer(result["prediction"])
+                    result["predicted_switch"] = parsed["switch"]
+                    result["predicted_direction"] = parsed["direction"]
+                    result["switch_correct"] = parsed["switch"] == sample["switch"]
+                    result["direction_correct"] = parsed["direction"] == sample["direction"]
+                    masks = pred_masks[0]
+                    result["mask_count"] = int(masks.shape[0])
+                    result["mask_paths"] = []
+                    error_stage = "save_mask"
+                    for mask_index, mask in enumerate(masks):
+                        mask_name = "{}_seg{}.png".format(
+                            os.path.splitext(sample["image"])[0], mask_index
+                        )
+                        mask_path = os.path.join(mask_dir, mask_name)
+                        mask_pixels = (mask > 0).cpu().numpy().astype(np.uint8) * 100
+                        if not cv2.imwrite(mask_path, mask_pixels):
+                            raise IOError("Could not save {}".format(mask_path))
+                        result["mask_paths"].append(mask_path)
+                except Exception as exc:
+                    result["error"] = "{}: {}".format(type(exc).__name__, exc)
+                    result["error_stage"] = error_stage
+                    result["traceback"] = traceback.format_exc(limit=20)
+                local_results.append(result)
+                if "error" in result:
+                    # Stop repeating a possible CUDA failure, but retain every
+                    # remaining sample in the accuracy denominator and report.
+                    for remaining in local_manifest[len(local_results):]:
+                        local_results.append({
+                            "image": remaining["image"],
+                            "image_index": remaining["image_index"],
+                            "expected_switch": remaining["switch"],
+                            "expected_direction": remaining["direction"],
+                            "rank": rank,
+                            "error": "Not run after an earlier inference failure on this rank",
+                            "error_stage": "skipped_after_error",
+                        })
+                    break
+    finally:
+        model_engine.train(was_training)
+
+    if distributed:
+        gathered_results = [None for _ in range(world_size)]
+        torch.distributed.all_gather_object(gathered_results, local_results)
+        results = [result for rank_results in gathered_results for result in rank_results]
+    else:
+        results = local_results
+    results.sort(key=lambda result: result["image_index"])
+    summary = summarize_switch_validation(manifest, results)
+    if args.is_main_process:
+        header = {
+            "epoch_index": epoch,
+            "epoch_number": epoch + 1,
+            "global_step": int(model_engine.global_steps),
+            "weights": "current_epoch_live_model",
+            "checkpoint_saved_before_validation": bool(checkpoint_saved),
+            "manifest": manifest_path,
+            "prompt": SWITCH_VALIDATION_PROMPT,
+            "max_new_tokens": args.epoch_switch_validation_max_new_tokens,
+        }
+        with open(os.path.join(output_dir, "results.json"), "w") as handle:
+            json.dump({"header": header, "summary": summary, "results": results}, handle, indent=2)
+            handle.write("\n")
+        print("[switch validation header] " + json.dumps(header), flush=True)
+        for result in results:
+            print("[switch validation result] " + json.dumps(result), flush=True)
+        print("[switch validation summary] " + json.dumps(summary), flush=True)
+        metrics = {**(val_metrics or {}), **switch_validation_wandb_metrics(summary), "epoch": epoch}
+        if writer is not None:
+            for name, value in switch_validation_wandb_metrics(summary).items():
+                writer.add_scalar(name, value, epoch)
+        # The regular IoUs are included in this same call: separate committed
+        # calls at one W&B step can otherwise discard the second set of metrics.
+        wandb_log(wandb_run, metrics, (epoch + 1) * args.steps_per_epoch)
+    if distributed:
+        torch.distributed.barrier()
+    if summary["error_count"]:
+        raise RuntimeError("Switch validation inference failed; inspect val_switch epoch results.json")
+    return summary
+
+
 def parse_args(args):
     parser = argparse.ArgumentParser(description="LISA Model Training")
     parser.add_argument("--local_rank", default=0, type=int, help="node rank")
@@ -918,6 +1095,22 @@ def parse_args(args):
         type=int,
         help="Maximum tokens generated per epoch reasoning inference sample.",
     )
+    parser.add_argument(
+        "--epoch_switch_validation",
+        action="store_true",
+        help="After every epoch, generate answers and masks on the labeled held-out switch subset.",
+    )
+    parser.add_argument(
+        "--epoch_switch_validation_json",
+        default=None,
+        help="Labels JSON; defaults to ReasonSeg/explanatory/val_switch_labels.json under dataset_dir.",
+    )
+    parser.add_argument(
+        "--epoch_switch_validation_max_new_tokens",
+        default=256,
+        type=int,
+        help="Maximum answer tokens per selected switch validation image.",
+    )
     parser.add_argument("--start_epoch", default=0, type=int)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True)
     parser.add_argument("--train_mask_decoder", action="store_true", default=True)
@@ -1037,6 +1230,32 @@ def main(args):
                 ),
                 flush=True,
             )
+
+    switch_validation_manifest = None
+    switch_validation_manifest_path = None
+    switch_validation_clip_processor = None
+    if args.epoch_switch_validation:
+        if args.epoch_switch_validation_max_new_tokens <= 0:
+            raise ValueError("--epoch_switch_validation_max_new_tokens must be positive")
+        (
+            switch_validation_manifest,
+            switch_validation_manifest_path,
+            switch_validation_image_dir,
+        ) = resolve_switch_validation_manifest(
+            args.dataset_dir, args.epoch_switch_validation_json
+        )
+        switch_validation_clip_processor = (
+            epoch_reasoning_clip_processor
+            if epoch_reasoning_clip_processor is not None
+            else CLIPImageProcessor.from_pretrained(args.vision_tower)
+        )
+        if args.is_main_process:
+            print("[switch validation setup] " + json.dumps({
+                "manifest": switch_validation_manifest_path,
+                "image_dir": switch_validation_image_dir,
+                "sample_count": len(switch_validation_manifest),
+                "prompt": SWITCH_VALIDATION_PROMPT,
+            }), flush=True)
 
     if args.is_main_process:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -1501,7 +1720,17 @@ def main(args):
     best_score, cur_ciou = 0.0, 0.0
 
     if args.eval_only:
-        giou, ciou = validate(val_loader, model_engine, 0, writer, args, wandb_run)
+        giou, ciou = validate(
+            val_loader, model_engine, 0, writer, args, wandb_run,
+            log_to_wandb=not args.epoch_switch_validation,
+        )
+        if args.epoch_switch_validation:
+            run_epoch_switch_validation(
+                model_engine, tokenizer, switch_validation_clip_processor,
+                switch_validation_manifest, switch_validation_manifest_path,
+                0, False, args, writer, wandb_run,
+                val_metrics={"val/giou": float(giou), "val/ciou": float(ciou)},
+            )
         if wandb_run is not None:
             wandb_run.finish()
         return
@@ -1521,6 +1750,7 @@ def main(args):
         )
 
         is_best = False
+        epoch_val_metrics = {}
         if args.no_eval == False:
             giou, ciou = validate(
                 val_loader,
@@ -1529,7 +1759,9 @@ def main(args):
                 writer,
                 args,
                 wandb_run,
+                log_to_wandb=not args.epoch_switch_validation,
             )
+            epoch_val_metrics = {"val/giou": float(giou), "val/ciou": float(ciou)}
             is_best = giou > best_score
             best_score = max(giou, best_score)
             cur_ciou = ciou if is_best else cur_ciou
@@ -1547,6 +1779,21 @@ def main(args):
                 args=args,
             )
             checkpoint_saved = True
+
+        if args.epoch_switch_validation:
+            run_epoch_switch_validation(
+                model_engine=model_engine,
+                tokenizer=tokenizer,
+                clip_image_processor=switch_validation_clip_processor,
+                manifest=switch_validation_manifest,
+                manifest_path=switch_validation_manifest_path,
+                epoch=epoch,
+                checkpoint_saved=checkpoint_saved,
+                args=args,
+                writer=writer,
+                wandb_run=wandb_run,
+                val_metrics=epoch_val_metrics,
+            )
 
         if args.epoch_reasoning_inference:
             run_epoch_reasoning_inference(
@@ -1880,7 +2127,7 @@ def train(
     return train_iter
 
 
-def validate(val_loader, model_engine, epoch, writer, args, wandb_run):
+def validate(val_loader, model_engine, epoch, writer, args, wandb_run, log_to_wandb=True):
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -1936,15 +2183,16 @@ def validate(val_loader, model_engine, epoch, writer, args, wandb_run):
     if args.is_main_process:
         writer.add_scalar("val/giou", giou, epoch)
         writer.add_scalar("val/ciou", ciou, epoch)
-        wandb_log(
-            wandb_run,
-            {
-                "val/giou": giou,
-                "val/ciou": ciou,
-                "epoch": epoch,
-            },
-            (epoch + 1) * args.steps_per_epoch,
-        )
+        if log_to_wandb:
+            wandb_log(
+                wandb_run,
+                {
+                    "val/giou": giou,
+                    "val/ciou": ciou,
+                    "epoch": epoch,
+                },
+                (epoch + 1) * args.steps_per_epoch,
+            )
         print("giou: {:.4f}, ciou: {:.4f}".format(giou, ciou))
 
     return giou, ciou

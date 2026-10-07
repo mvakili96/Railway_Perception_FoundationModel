@@ -23,7 +23,7 @@ def parse_args():
     )
     parser.add_argument(
         "--image-dir",
-        default="dataset/reason_seg/ReasonSegRail/val",
+        default="dataset/reason_seg/ReasonSeg/val",
         help="Directory containing the cropped validation images.",
     )
     parser.add_argument(
