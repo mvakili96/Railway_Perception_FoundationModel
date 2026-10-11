@@ -11,3 +11,9 @@ mask_output/
 /dataset/*
 !/dataset/README.md
 PROJECT_MEMORY.md
+docs/qwen3_vl_environment.md
+docs/qwen3_vl_model.md
+docs/qwen3_vl_processing.md
+docs/qwen3_vl_sam_plan.md
+docs/qwen3_vl_training.md
+docs/supervisor_report/

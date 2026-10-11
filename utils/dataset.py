@@ -12,28 +12,21 @@ import torch.nn.functional as F
 from pycocotools import mask
 from transformers import CLIPImageProcessor
 
-from model.llava import conversation as conversation_lib
-from model.llava.constants import (DEFAULT_IMAGE_TOKEN, IGNORE_INDEX,
-                                   IMAGE_TOKEN_INDEX)
-from model.llava.mm_utils import tokenizer_image_token
 from model.segment_anything.utils.transforms import ResizeLongestSide
 
-from .conversation import get_default_conv_template
 from .data_processing import get_mask_from_json
 from .reason_seg_dataset import RAIL_EGO_SIDE_IGNORE_INDEX, ReasonSegDataset
-
-from .reason_seg_dataset import ReasonSegDataset
 from .rail_reasoning import (
     RAIL_REASONING_DECISION_GROUP_WEIGHTS,
     SEG_TOKEN_CE_WEIGHT,
     locate_rail_reasoning_group_token_positions,
 )
-from .refer import REFER
-from .refer_seg_dataset import ReferSegDataset
 from .sem_seg_dataset import SemSegDataset
 from .utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
-                    DEFAULT_IMAGE_TOKEN)
-from .vqa_dataset import VQADataset
+                    DEFAULT_IMAGE_TOKEN, IGNORE_INDEX)
+from .segmentation_sample import (
+    StructuredSegSample, render_llava_conversations, validate_sample_mode,
+)
 
 def apply_token_sequence_weight(token_weights, token_ids, token_sequence, weight):
     if weight <= 1.0 or len(token_sequence) == 0:
@@ -49,6 +42,9 @@ def apply_token_sequence_weight(token_weights, token_ids, token_sequence, weight
 def collate_fn(
     batch, tokenizer=None, conv_type="llava_v1", use_mm_start_end=True, local_rank=-1, use_rail_reasoning_weighted_ce=False, use_seg_token_weighted_ce=False,
 ):
+    from model.llava import conversation as conversation_lib
+    from model.llava.mm_utils import tokenizer_image_token
+
     image_path_list = []
     images_list = []
     images_clip_list = []
@@ -357,8 +353,10 @@ class HybridDataset(torch.utils.data.Dataset):
         reason_seg_weight_map_dir_name="weight_maps",
         reason_seg_weight_map_weight=1.0,
         rail_counterfactual_flip_prob=0.0,
+        sample_mode="llava",
 
     ):
+        self.sample_mode = validate_sample_mode(sample_mode)
         self.exclude_val = exclude_val
         self.dataset = dataset
         self.samples_per_epoch = samples_per_epoch
@@ -373,6 +371,10 @@ class HybridDataset(torch.utils.data.Dataset):
         self.precision = precision
 
         self.datasets = dataset.split("||")
+        if self.sample_mode == "structured" and any(
+            ds not in ("sem_seg", "reason_seg", "reason_seg_rail") for ds in self.datasets
+        ):
+            raise ValueError("Structured mode currently supports only sem_seg and reason_seg datasets.")
 
         self.all_datasets = []
         for dataset in self.datasets:
@@ -388,9 +390,12 @@ class HybridDataset(torch.utils.data.Dataset):
                         num_classes_per_sample,
                         exclude_val,
                         sem_seg_data,
+                        sample_mode=self.sample_mode,
                     )
                 )
             elif dataset == "refer_seg":
+                from .refer_seg_dataset import ReferSegDataset
+
                 self.all_datasets.append(
                     ReferSegDataset(
                         base_image_dir,
@@ -405,6 +410,8 @@ class HybridDataset(torch.utils.data.Dataset):
                     )
                 )
             elif dataset == "vqa":
+                from .vqa_dataset import VQADataset
+
                 self.all_datasets.append(
                     VQADataset(
                         base_image_dir,
@@ -433,6 +440,7 @@ class HybridDataset(torch.utils.data.Dataset):
                         explanatory,
                         reason_seg_weight_map_dir_name,
                         reason_seg_weight_map_weight,
+                        sample_mode=self.sample_mode,
                     )
                 )
 
@@ -452,6 +460,7 @@ class HybridDataset(torch.utils.data.Dataset):
                         reason_seg_weight_map_dir_name,
                         reason_seg_weight_map_weight,
                         rail_counterfactual_flip_prob,
+                        sample_mode=self.sample_mode,
                     )
                 )
 
@@ -462,6 +471,10 @@ class HybridDataset(torch.utils.data.Dataset):
         ind = np.random.choice(list(range(len(self.datasets))), p=self.sample_rate)
         data = self.all_datasets[ind]
         inference = False
+        if self.sample_mode == "structured":
+            sample = data[0]
+            sample.inference = inference
+            return sample
         return *data[0], inference
 
 def init_railsem_sem_seg_val(base_image_dir, split):
@@ -497,7 +510,9 @@ class ValDataset(torch.utils.data.Dataset):
         vision_tower,
         val_dataset,
         image_size=1024,
+        sample_mode="llava",
     ):
+        self.sample_mode = validate_sample_mode(sample_mode)
         self.base_image_dir = base_image_dir
         splits = val_dataset.split("|")
         if len(splits) == 2:
@@ -523,7 +538,10 @@ class ValDataset(torch.utils.data.Dataset):
         self.image_size = image_size
         self.tokenizer = tokenizer
         self.transform = ResizeLongestSide(image_size, allow_upscale=False)
-        self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
+        self.clip_image_processor = (
+            CLIPImageProcessor.from_pretrained(vision_tower)
+            if self.sample_mode == "llava" else None
+        )
 
     def __len__(self):
         if self.data_type == "refer_seg":
@@ -597,35 +615,32 @@ class ValDataset(torch.utils.data.Dataset):
             mask_json, sampled_sents, is_sentence = get_mask_from_json(json_path, image)
             sampled_sents = [sampled_sents[0]]
 
-        conversations = []
-        conv = conversation_lib.default_conversation.copy()
+        rgb_image = image.copy() if self.sample_mode == "structured" else None
+        questions = []
+        answers = []
         i = 0
         while i < len(sampled_sents):
-            conv.messages = []
             text = sampled_sents[i].strip()
             if is_sentence:
-                conv.append_message(
-                    conv.roles[0],
+                questions.append(
                     DEFAULT_IMAGE_TOKEN
                     + "\n {} Please output segmentation mask.".format(text),
                 )
-                conv.append_message(conv.roles[1], "[SEG].")
             else:
-                conv.append_message(
-                    conv.roles[0],
+                questions.append(
                     DEFAULT_IMAGE_TOKEN
                     + "\n What is {} in this image? Please output segmentation mask.".format(
                         text
                     ),
                 )
-                conv.append_message(conv.roles[1], "[SEG].")
-            conversations.append(conv.get_prompt())
+            answers.append("[SEG].")
             i += 1
 
         # preprocess image for clip
-        image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")[
-            "pixel_values"
-        ][0]
+        image_clip = (
+            self.clip_image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0]
+            if self.sample_mode == "llava" else None
+        )
 
         # preprocess image for sam
         image = self.transform.apply_image(image)
@@ -669,6 +684,15 @@ class ValDataset(torch.utils.data.Dataset):
         labels = torch.ones(masks.shape[1], masks.shape[2]) * self.ignore_label
         inference = True
 
+        if self.sample_mode == "structured":
+            return StructuredSegSample(
+                image_path=image_path, rgb_image=rgb_image, sam_image=image,
+                questions=questions, answers=answers, masks=masks, label=labels,
+                resize=resize, sampled_classes=list(sampled_sents),
+                reason_seg_weight_maps=torch.empty(0), inference=True,
+                metadata={"dataset": self.data_type, "source": self.ds, "flipped": False},
+            ).validate()
+        conversations = render_llava_conversations(questions, answers)
         return (
             image_path,
             image,
@@ -681,4 +705,3 @@ class ValDataset(torch.utils.data.Dataset):
             None,
             inference,
         )
-

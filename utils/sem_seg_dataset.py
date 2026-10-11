@@ -11,10 +11,12 @@ from PIL import Image
 from pycocotools.coco import COCO
 from transformers import CLIPImageProcessor
 
-from model.llava import conversation as conversation_lib
 from model.segment_anything.utils.transforms import ResizeLongestSide
 
 from .utils import ANSWER_LIST, SHORT_QUESTION_LIST
+from .segmentation_sample import (
+    StructuredSegSample, render_llava_conversations, validate_sample_mode,
+)
 
 
 def init_mapillary(base_image_dir):
@@ -160,7 +162,9 @@ class SemSegDataset(torch.utils.data.Dataset):
         num_classes_per_sample: int = 3,
         exclude_val=False,
         sem_seg_data="ade20k||cocostuff||partimagenet||pascal_part||paco_lvis||mapillary",
+        sample_mode="llava",
     ):
+        self.sample_mode = validate_sample_mode(sample_mode)
         self.exclude_val = exclude_val
         self.samples_per_epoch = samples_per_epoch
         self.num_classes_per_sample = num_classes_per_sample
@@ -170,7 +174,10 @@ class SemSegDataset(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
         self.precision = precision
         self.transform = ResizeLongestSide(image_size, allow_upscale=False)
-        self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
+        self.clip_image_processor = (
+            CLIPImageProcessor.from_pretrained(vision_tower)
+            if self.sample_mode == "llava" else None
+        )
 
         self.short_question_list = SHORT_QUESTION_LIST
         self.answer_list = ANSWER_LIST
@@ -226,9 +233,11 @@ class SemSegDataset(torch.utils.data.Dataset):
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
             # preprocess image for clip
-            image_clip = self.clip_image_processor.preprocess(
-                image, return_tensors="pt"
-            )["pixel_values"][0]
+            rgb_image = image.copy() if self.sample_mode == "structured" else None
+            image_clip = (
+                self.clip_image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0]
+                if self.sample_mode == "llava" else None
+            )
             image = self.transform.apply_image(image)  # preprocess image for sam
             resize = image.shape[:2]
             annIds = coco_api.getAnnIds(imgIds=image_info["id"])
@@ -279,9 +288,11 @@ class SemSegDataset(torch.utils.data.Dataset):
             img = cv2.imread(image_path)
             image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             # preprocess image for clip
-            image_clip = self.clip_image_processor.preprocess(
-                image, return_tensors="pt"
-            )["pixel_values"][0]
+            rgb_image = image.copy() if self.sample_mode == "structured" else None
+            image_clip = (
+                self.clip_image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0]
+                if self.sample_mode == "llava" else None
+            )
             image = self.transform.apply_image(image)  # preprocess image for sam
             resize = image.shape[:2]
             unique_label = np.unique(label).tolist()
@@ -316,17 +327,6 @@ class SemSegDataset(torch.utils.data.Dataset):
             class_id = self.data2classes[ds].tolist().index(sampled_cls)
             class_ids.append(class_id)
 
-        conversations = []
-        conv = conversation_lib.default_conversation.copy()
-
-        i = 0
-        while i < len(questions):
-            conv.messages = []
-            conv.append_message(conv.roles[0], questions[i])
-            conv.append_message(conv.roles[1], answers[i])
-            conversations.append(conv.get_prompt())
-            i += 1
-
         image = self.preprocess(torch.from_numpy(image).permute(2, 0, 1).contiguous())
 
         if ds in ["paco_lvis", "pascal_part"]:
@@ -348,6 +348,15 @@ class SemSegDataset(torch.utils.data.Dataset):
             for class_id in class_ids:
                 masks.append(label == class_id)
             masks = torch.stack(masks, dim=0)
+        if self.sample_mode == "structured":
+            return StructuredSegSample(
+                image_path=image_path, rgb_image=rgb_image, sam_image=image,
+                questions=questions, answers=answers, masks=masks, label=label,
+                resize=resize, sampled_classes=sampled_classes,
+                reason_seg_weight_maps=torch.empty(0),
+                metadata={"dataset": "sem_seg", "source": ds, "flipped": False},
+            ).validate()
+        conversations = render_llava_conversations(questions, answers)
         return (
             image_path,
             image,

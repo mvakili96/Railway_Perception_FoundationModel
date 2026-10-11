@@ -10,7 +10,6 @@ from PIL import Image
 import torch.nn.functional as F
 from transformers import CLIPImageProcessor
 
-from model.llava import conversation as conversation_lib
 from model.segment_anything.utils.transforms import ResizeLongestSide
 
 from .data_processing import get_mask_from_json
@@ -20,6 +19,9 @@ from .utils import (ANSWER_LIST, DEFAULT_IMAGE_TOKEN,
 from .rail_augmentation import (flip_rail_reasoning_explanation,
                                 horizontal_flip, swap_left_right)
 from .rail_reasoning import RAIL_REASONING_DECISION_PATTERN
+from .segmentation_sample import (
+    StructuredSegSample, render_llava_conversations, validate_sample_mode,
+)
 
 RAIL_EGO_SIDE_TO_LABEL = {"left-hand": 0, "right-hand": 1}
 RAIL_EGO_SIDE_IGNORE_INDEX = -100
@@ -55,7 +57,9 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         weight_map_dir_name="weight_maps",
         weight_map_weight=1.0,    
         counterfactual_flip_prob=0.0,
+        sample_mode="llava",
         ):
+        self.sample_mode = validate_sample_mode(sample_mode)
         if not 0.0 <= counterfactual_flip_prob <= 1.0:
             raise ValueError("counterfactual_flip_prob must be between 0 and 1")
         self.exclude_val = exclude_val
@@ -73,7 +77,10 @@ class ReasonSegDataset(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
         self.precision = precision
         self.transform = ResizeLongestSide(image_size, allow_upscale=False)
-        self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
+        self.clip_image_processor = (
+            CLIPImageProcessor.from_pretrained(vision_tower)
+            if self.sample_mode == "llava" else None
+        )
 
         self.short_question_list = SHORT_QUESTION_LIST
         self.long_question_list = LONG_QUESTION_LIST
@@ -199,9 +206,11 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                 )
 
         # preprocess image for clip
-        image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")[
-            "pixel_values"
-        ][0]
+        rgb_image = image.copy() if self.sample_mode == "structured" else None
+        image_clip = (
+            self.clip_image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0]
+            if self.sample_mode == "llava" else None
+        )
     
         if len(sents) >= self.num_classes_per_sample:
             sampled_inds = np.random.choice(
@@ -267,18 +276,6 @@ class ReasonSegDataset(torch.utils.data.Dataset):
                     RAIL_REASONING_DECISION_PATTERN,
                 )
 
-            conversations = []
-            conv = conversation_lib.default_conversation.copy()
-            roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
-
-            i = 0
-            while i < len(questions):
-                conv.messages = []
-                conv.append_message(conv.roles[0], questions[i])
-                conv.append_message(conv.roles[1], answers[i])
-                conversations.append(conv.get_prompt())
-                i += 1
-
         if use_counterfactual_flip:
             sampled_sents = [swap_left_right(text) for text in sampled_sents]
 
@@ -330,7 +327,18 @@ class ReasonSegDataset(torch.utils.data.Dataset):
             )
             self.counterfactual_flip_logged = True
 
+        if self.sample_mode == "structured":
+            return StructuredSegSample(
+                image_path=image_path, rgb_image=rgb_image, sam_image=image,
+                questions=questions, answers=answers, masks=masks, label=label,
+                resize=resize, sampled_classes=sampled_sents,
+                reason_seg_weight_maps=reason_seg_weight_maps,
+                rail_ego_side_label=rail_ego_side_label,
+                is_rail_reasoning=os.path.basename(os.path.dirname(os.path.dirname(image_path))) == "ReasonSegRail",
+                metadata={"dataset": "reason_seg", "flipped": use_counterfactual_flip},
+            ).validate()
 
+        conversations = render_llava_conversations(questions, answers)
         return (
             image_path,
             image,

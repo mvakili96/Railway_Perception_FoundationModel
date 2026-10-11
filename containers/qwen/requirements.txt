@@ -1,0 +1,14 @@
+# Separate from the legacy LISA requirements. The Docker base supplies CUDA wheels.
+torch==2.7.1+cu118
+torchvision==0.22.1+cu118
+transformers==4.57.6
+peft==0.17.1
+deepspeed==0.17.6
+accelerate>=1.10,<2
+numpy==1.26.4
+Pillow>=10,<12
+opencv-python-headless==4.11.0.86
+pycocotools==2.0.10
+wandb==0.22.3
+# Record all resolved transitive versions in the image and each smoke report.
+# Do not install the legacy root requirements or its Conda lock here.
