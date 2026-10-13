@@ -51,6 +51,28 @@ def save_binary_mask(mask, path):
     Image.fromarray(pixels).save(path)
 
 
+def save_lisa_compatible_outputs(mask, rgb_image, mask_path=None, vis_path=None):
+    """Additional legacy JPEGs; lossless PNGs remain the canonical predictions.
+
+    Match chat_batch.py: image-named 0/100 masks and 50% red foreground overlays.
+    JPEG compression can change pixel values, just as in the original demo.
+    """
+    if not bool(torch.isfinite(mask).all()):
+        raise FloatingPointError("Cannot save a nonfinite predicted mask.")
+    foreground = (mask.detach().cpu() > 0).numpy()
+    if foreground.shape != rgb_image.shape[:2]:
+        raise ValueError("Legacy output mask must match the original image size.")
+    if mask_path is not None:
+        pixels = foreground.astype(np.uint8) * 100
+        if not cv2.imwrite(str(mask_path), pixels):
+            raise OSError(f"Cannot write legacy mask: {mask_path}")
+    if vis_path is not None:
+        overlay = rgb_image.copy()
+        overlay[foreground] = (rgb_image * 0.5 + np.array([255, 0, 0]) * 0.5)[foreground]
+        if not cv2.imwrite(str(vis_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)):
+            raise OSError(f"Cannot write legacy visualization: {vis_path}")
+
+
 def summarize_test_results(records):
     """One record per request: no filtering failures out of the denominator."""
     total = len(records)

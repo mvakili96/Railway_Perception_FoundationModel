@@ -9,7 +9,8 @@ import torch
 from model.QwenSAM import QwenSAM
 from utils.data_processing import get_mask_from_json
 from utils.qwen_checkpoint import write_json
-from utils.qwen_evaluation import foreground_iou, inference_sample, summarize_test_results, save_binary_mask
+from utils.qwen_evaluation import (foreground_iou, inference_sample, summarize_test_results,
+                                   save_binary_mask, save_lisa_compatible_outputs)
 from utils.qwen_processing import QwenSegCollator
 from utils.qwen_training import move_batch
 from utils.rail_switch_validation import SWITCH_VALIDATION_PROMPT
@@ -47,10 +48,30 @@ def load_requests(image_path=None, manifest_path=None):
     return requests
 
 
+def validate_output_directories(output_dir, model_path, requests, mask_save_path=None, vis_save_path=None):
+    """Check all outputs before creating any directories or loading the model."""
+    directories = [Path(path).resolve() for path in (output_dir, mask_save_path, vis_save_path) if path]
+    if len(set(directories)) != len(directories):
+        raise ValueError("Results, masks, and visualization directories must be distinct.")
+    protected = [Path(model_path).resolve(), *(Path(r["image_path"]).resolve().parent for r in requests)]
+    for directory in directories:
+        if any(directory == p or directory.is_relative_to(p) or p.is_relative_to(directory) for p in protected):
+            raise ValueError("Output directories must be separate from model and input directories.")
+        if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
+            raise ValueError(f"Output directory must be empty: {directory}")
+    if mask_save_path or vis_save_path:
+        stems = [Path(r["image_path"]).stem.casefold() for r in requests]
+        if len(set(stems)) != len(stems):
+            raise ValueError("Image stems must be unique for image-named legacy JPEG outputs.")
+    return directories
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--mask_save_path", help="Optional LISA-compatible image-named 0/100 mask JPEGs")
+    parser.add_argument("--vis_save_path", help="Optional LISA-compatible red-overlay JPEGs")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--image_path")
     source.add_argument("--manifest")
@@ -63,12 +84,13 @@ def main(argv=None):
         parser.error("Run merge_qwen_sam.py and pass export verification before test inference.")
     requests = load_requests(args.image_path, args.manifest)
     output_dir = Path(args.output_dir).resolve()
-    protected = [Path(args.model_path).resolve(), *(Path(r["image_path"]).parent for r in requests)]
-    if any(output_dir == p or output_dir.is_relative_to(p) or p.is_relative_to(output_dir) for p in protected):
-        parser.error("Output directory must be separate from model and input directories.")
-    if output_dir.exists() and any(output_dir.iterdir()):
-        parser.error("Output directory must be empty.")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        directories = validate_output_directories(output_dir, args.model_path, requests,
+                                                  args.mask_save_path, args.vis_save_path)
+    except ValueError as exc:
+        parser.error(str(exc))
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
     model = QwenSAM.from_pretrained(args.model_path).cuda().eval()
     collator = QwenSegCollator(model.processor, model.processing_config)
     records = []
@@ -96,10 +118,20 @@ def main(argv=None):
                     prediction = model.generate_masks(batch, max_new_tokens=args.max_new_tokens, do_sample=False)
                 masks = prediction["pred_masks"][0].cpu()
                 record.update(prediction=prediction["answers"][0], mask_count=len(masks))
+                print("text_output: ", record["prediction"], flush=True)
                 for mask_index, mask in enumerate(masks):
                     name = f"{index:06d}_mask_{mask_index:02d}.png"
                     save_binary_mask(mask, output_dir / name)
                     record["mask_files"].append(name)
+                if len(masks) and (args.mask_save_path or args.vis_save_path):
+                    # Original LISA demo saves the first mask for an image.
+                    # Keep all events in PNG/JSON outputs and flag multiple SEG.
+                    filename = Path(request["image_path"]).stem + ".jpg"
+                    mask_path = Path(args.mask_save_path) / filename if args.mask_save_path else None
+                    vis_path = Path(args.vis_save_path) / filename if args.vis_save_path else None
+                    save_lisa_compatible_outputs(masks[0], sample.rgb_image, mask_path, vis_path)
+                    record.update(legacy_mask_index=0, legacy_mask_file=str(mask_path) if mask_path else None,
+                                  legacy_vis_file=str(vis_path) if vis_path else None)
                 record["mask_status"] = "ok" if len(masks) == 1 else "missing_seg" if not len(masks) else "multiple_seg"
                 if target is not None and len(masks) == 1:
                     intersection, union, iou = foreground_iou(masks[0] > 0, target)

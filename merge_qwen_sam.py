@@ -2,9 +2,13 @@
 """Consolidate a complete ZeRO-2 checkpoint and export native merged Qwen + SAM."""
 
 import argparse
+from datetime import datetime, timezone
 import gc
+import json
+import math
 from pathlib import Path
 import torch
+from uuid import uuid4
 
 from model.QwenSAM import QwenSAM
 from utils.qwen_checkpoint import restore_for_export, write_json
@@ -36,28 +40,193 @@ def export_probe(model, image, max_new_tokens):
         "logits": teacher["logits"][:, -2:].cpu().float()}
 
 
-def compare_probes(reference, candidate, tolerance, max_mask_disagreement=0.001):
-    if reference["answers"] != candidate["answers"]:
-        raise ValueError("Export changed deterministic generated answers.")
+class ProbeComparisonError(ValueError):
+    """Verification failure with the complete diagnostics attached."""
+
+    def __init__(self, report):
+        self.report = report
+        super().__init__(f"Export verification failed ({report['stage']}): " + "; ".join(report["failures"]))
+
+
+def binary_mask_statistics(reference, candidate):
+    """Agreement between two predictions, not IoU against ground truth."""
+    reference, candidate = reference > 0, candidate > 0
+    changed = int((reference != candidate).sum())
+    intersection = int((reference & candidate).sum())
+    union = int((reference | candidate).sum())
+    return {"binary_changed_pixels": changed,
+            "binary_disagreement_fraction": changed / reference.numel() if reference.numel() else 0.0,
+            "binary_mask_iou": intersection / union if union else 1.0,
+            "reference_foreground_pixels": int(reference.sum()),
+            "candidate_foreground_pixels": int(candidate.sum())}
+
+
+def compare_probes(reference, candidate, tolerance, max_mask_disagreement=0.001,
+                   *, stage="comparison", diagnostics_path=None, policy="strict"):
+    """Task-level merge gates versus strict merged-model reload verification.
+
+    BF16 merging may change raw logits without changing the answer/mask. The
+    merge policy records those differences without using them as a gate. Both
+    policies still reject changed answers, shapes/dtypes, nonfinite tensors and
+    excessive binary-mask disagreement. Strict additionally gates raw logits.
+    """
+    if policy not in ("strict", "merge"):
+        raise ValueError("Unknown export verification policy.")
+    report = {"stage": stage, "policy": policy, "passed": False, "atol": tolerance, "rtol": tolerance,
+              "allowed_mask_disagreement": max_mask_disagreement,
+              "answers_equal": reference["answers"] == candidate["answers"],
+              "reference_answers": reference["answers"], "candidate_answers": candidate["answers"],
+              "tensors": [], "failures": [], "diagnostic_warnings": []}
+    failures = report["failures"]
+    if not report["answers_equal"]:
+        failures.append("Export changed deterministic generated answers.")
+    if policy == "merge":
+        # A fully trained segmentation export must not pass merely because
+        # neither model generated SEG and their empty outputs agree.
+        for label, probe in (("reference", reference), ("candidate", candidate)):
+            masks = probe["generated_masks"]
+            if len(masks) != len(probe["answers"]) or not masks or \
+               any(mask.ndim != 3 or mask.shape[0] != 1 for mask in masks):
+                failures.append(f"{label}: require exactly one generated mask per verification answer.")
     maximum = 0.0
     disagreement = 0.0
     for key in ("generated_masks", "teacher_masks", "logits"):
         left = reference[key] if isinstance(reference[key], list) else [reference[key]]
         right = candidate[key] if isinstance(candidate[key], list) else [candidate[key]]
         if len(left) != len(right):
-            raise ValueError("Export changed mask counts.")
-        for a, b in zip(left, right):
-            if a.shape != b.shape or not bool(torch.isfinite(b).all()):
-                raise ValueError(f"Invalid export probe: {key}")
+            failures.append(f"{key}: tensor-group count changed ({len(left)} vs {len(right)}).")
+        for index, (a, b) in enumerate(zip(left, right)):
+            name = f"{key}[{index}]" if isinstance(reference[key], list) else key
+            entry = {"name": name, "reference_shape": list(a.shape), "candidate_shape": list(b.shape),
+                     "reference_dtype": str(a.dtype), "candidate_dtype": str(b.dtype),
+                     "reference_nonfinite_count": int((~torch.isfinite(a)).sum()),
+                     "candidate_nonfinite_count": int((~torch.isfinite(b)).sum())}
+            report["tensors"].append(entry)
+            if a.shape != b.shape or entry["reference_nonfinite_count"] or entry["candidate_nonfinite_count"]:
+                entry["logits_close"] = False
+                failures.append(f"Invalid export probe: {name} (shape mismatch or nonfinite values).")
+                continue
+            if a.dtype != b.dtype:
+                failures.append(f"{name}: tensor dtype changed ({a.dtype} vs {b.dtype}).")
+            # Probes are CPU FP32 tensors. Double precision keeps diagnostic
+            # subtraction/quantiles finite even for extreme finite inputs.
+            a64, b64 = a.detach().cpu().double(), b.detach().cpu().double()
+            difference = (a64 - b64).abs()
+            close = torch.isclose(a64, b64, atol=tolerance, rtol=tolerance)
+            entry.update(element_count=a.numel(), outside_tolerance_count=int((~close).sum()),
+                         outside_tolerance_fraction=float((~close).double().mean()) if a.numel() else 0.0)
             if a.numel():
-                maximum = max(maximum, float((a - b).abs().max()))
-            torch.testing.assert_close(a, b, atol=tolerance, rtol=tolerance)
-            if key.endswith("masks") and a.numel():
-                fraction = float(((a > 0) != (b > 0)).float().mean())
+                flat = difference.flatten()
+                percentiles = torch.quantile(flat, torch.tensor([0.5, 0.95, 0.99], dtype=flat.dtype))
+                maximum_index = int(flat.argmax())
+                coordinates = [int(value) for value in torch.unravel_index(
+                    torch.tensor(maximum_index), a.shape)] if a.ndim else []
+                entry.update(mean_abs_error=float(flat.mean()), p50_abs_error=float(percentiles[0]),
+                             p95_abs_error=float(percentiles[1]), p99_abs_error=float(percentiles[2]),
+                             max_abs_error=float(flat[maximum_index]), max_abs_error_index=coordinates,
+                             max_abs_error_reference=float(a64.flatten()[maximum_index]),
+                             max_abs_error_candidate=float(b64.flatten()[maximum_index]))
+                maximum = max(maximum, entry["max_abs_error"])
+            if key == "logits" and a.numel() and a.ndim >= 2:
+                reference_logp = torch.log_softmax(a64, dim=-1)
+                candidate_logp = torch.log_softmax(b64, dim=-1)
+                kl = (reference_logp.exp() * (reference_logp - candidate_logp)).sum(-1)
+                entry.update(reference_argmax_tokens=a64.argmax(-1).tolist(),
+                             candidate_argmax_tokens=b64.argmax(-1).tolist(),
+                             argmax_agreement=float((a64.argmax(-1) == b64.argmax(-1)).double().mean()),
+                             mean_kl_reference_to_candidate=float(kl.mean().clamp_min(0)),
+                             max_kl_reference_to_candidate=float(kl.max().clamp_min(0)))
+            if key.endswith("masks"):
+                entry.update(binary_mask_statistics(a64, b64))
+                if a.ndim == 3:
+                    entry["per_mask"] = [binary_mask_statistics(x, y) for x, y in zip(a64, b64)]
+                fraction = entry["binary_disagreement_fraction"]
                 disagreement = max(disagreement, fraction)
                 if fraction > max_mask_disagreement:
-                    raise ValueError(f"Export mask disagreement {fraction} exceeds {max_mask_disagreement}.")
-    return {"max_abs_difference": maximum, "max_mask_disagreement": disagreement}
+                    failures.append(f"{name}: mask disagreement {fraction} exceeds {max_mask_disagreement}.")
+                for mask_index, statistics in enumerate(entry.get("per_mask", [])):
+                    if statistics["binary_disagreement_fraction"] > max_mask_disagreement:
+                        failures.append(f"{name} mask {mask_index}: per-mask disagreement exceeds {max_mask_disagreement}.")
+            entry["raw_logit_gate_applied"] = policy == "strict"
+            try:
+                torch.testing.assert_close(a, b, atol=tolerance, rtol=tolerance)
+                entry["logits_close"] = True
+            except AssertionError as exc:
+                entry["logits_close"] = False
+                entry["assert_close_error"] = str(exc)
+                message = f"{name}: raw-logit numerical comparison failed."
+                if policy == "strict":
+                    failures.append(message)
+                else:
+                    report["diagnostic_warnings"].append(message)
+    report.update(max_abs_difference=maximum, max_mask_disagreement=disagreement, passed=not failures)
+    if diagnostics_path is not None:
+        report["diagnostics_path"] = str(diagnostics_path)
+        write_json(diagnostics_path, report)
+    print("[export comparison] " + json.dumps(report, allow_nan=False), flush=True)
+    if failures:
+        raise ProbeComparisonError(report)
+    return report
+
+
+def load_verification_images(image=None, manifest=None):
+    """Explicit fixed membership; never silently skip an unavailable image."""
+    if bool(image) == bool(manifest):
+        raise ValueError("Provide exactly one verification image or manifest.")
+    if image:
+        paths = [Path(image).resolve()]
+    else:
+        manifest = Path(manifest).resolve()
+        data = json.loads(manifest.read_text())
+        if not isinstance(data, dict) or data.get("schema_version") != 1 or \
+           not isinstance(data.get("image_dir"), str) or not isinstance(data.get("images"), list) or \
+           not data["images"] or any(not isinstance(name, str) or not name for name in data["images"]):
+            raise ValueError("Verification manifest requires schema_version=1, image_dir and a nonempty images list.")
+        directory = Path(data["image_dir"])
+        if not directory.is_absolute():
+            directory = manifest.parent / directory
+        paths = []
+        for name in data["images"]:
+            path = Path(name)
+            path = path.resolve() if path.is_absolute() else (directory / path).resolve()
+            paths.append(path)
+    if len(set(paths)) != len(paths):
+        raise ValueError("Duplicate verification images.")
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("Missing verification images: " + ", ".join(missing))
+    return [str(path) for path in paths]
+
+
+def compare_probe_sets(reference, candidate, images, tolerance, max_mask_disagreement,
+                       *, stage, policy, diagnostics):
+    """Collect all image diagnostics before deciding whether a stage passed."""
+    if len(reference) != len(candidate) or len(reference) != len(images) or not images:
+        raise ValueError("Probe lists must align with every verification image.")
+    reports = []
+    failures = []
+    for index, (before, after, image) in enumerate(zip(reference, candidate, images)):
+        report_path = diagnostics / stage / f"{index:02d}_{Path(image).stem}.json"
+        try:
+            report = compare_probes(before, after, tolerance, max_mask_disagreement,
+                stage=stage, policy=policy, diagnostics_path=report_path)
+        except ProbeComparisonError as exc:
+            report = exc.report
+        reports.append({"image": image, **report})
+        failures.extend(f"{Path(image).name}: {message}" for message in report["failures"])
+    summary = {"stage": stage, "policy": policy, "passed": not failures,
+               "diagnostics_path": str(diagnostics / f"{stage}.json"),
+               "sample_count": len(images), "passed_sample_count": sum(r["passed"] for r in reports),
+               "answers_equal_count": sum(r["answers_equal"] for r in reports),
+               "max_abs_difference": max(r["max_abs_difference"] for r in reports),
+               "max_mask_disagreement": max(r["max_mask_disagreement"] for r in reports),
+               "failures": failures, "results": reports}
+    write_json(summary["diagnostics_path"], summary)
+    print("[export subset summary] " + json.dumps({key: value for key, value in summary.items()
+                                                  if key != "results"}), flush=True)
+    if failures:
+        raise ProbeComparisonError(summary)
+    return summary
 
 
 def main(argv=None):
@@ -65,11 +234,14 @@ def main(argv=None):
     parser.add_argument("--run_dir", required=True)
     parser.add_argument("--tag")
     parser.add_argument("--output_dir", required=True)
-    parser.add_argument("--verify_image", required=True, help="One real image for mandatory pre/post merge and reload probes")
+    verification_source = parser.add_mutually_exclusive_group(required=True)
+    verification_source.add_argument("--verify_image", help="Single-image debug probe; launcher defaults to a fixed validation manifest")
+    verification_source.add_argument("--verify_manifest", help="Fixed images for mandatory pre/post merge and reload probes")
     parser.add_argument("--max_new_tokens", type=int, default=256)
-    parser.add_argument("--tolerance", type=float, default=0.03, help="BF16 absolute and relative comparison tolerance")
+    parser.add_argument("--tolerance", type=float, default=0.03, help="Strict reload tolerance; diagnostic only for LoRA merging")
     parser.add_argument("--max_mask_disagreement", type=float, default=0.001,
                         help="Maximum fraction of thresholded pixels changed by BF16 LoRA merging")
+    parser.add_argument("--diagnostics_dir", help="Default: RUN_DIR/export_diagnostics; one new folder per attempt")
     args = parser.parse_args(argv)
     output = Path(args.output_dir).resolve()
     run = Path(args.run_dir).resolve()
@@ -77,25 +249,50 @@ def main(argv=None):
         parser.error("Export directory must be separate from the training run.")
     if output.exists() and any(output.iterdir()):
         parser.error("Export directory must be empty; never overwrite an export.")
-    if args.tolerance <= 0 or not 0 <= args.max_mask_disagreement <= 1 or not Path(args.verify_image).is_file():
-        parser.error("Provide a real verification image and positive tolerance.")
+    if not math.isfinite(args.tolerance) or args.tolerance <= 0 or \
+       not math.isfinite(args.max_mask_disagreement) or not 0 <= args.max_mask_disagreement <= 1 or args.max_new_tokens <= 0:
+        parser.error("Provide positive finite tolerances and generation budget.")
+    try:
+        images = load_verification_images(args.verify_image, args.verify_manifest)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    diagnostics_root = Path(args.diagnostics_dir).resolve() if args.diagnostics_dir else run / "export_diagnostics"
+    if diagnostics_root == output or diagnostics_root.is_relative_to(output) or output.is_relative_to(diagnostics_root):
+        parser.error("Diagnostics must be separate from the export directory.")
+    attempt = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8]
+    diagnostics = diagnostics_root / attempt
     model, metadata, tag = restore_for_export(run, args.tag)
+    write_json(diagnostics / "attempt.json", {"source_run": str(run), "source_tag": tag,
+        "output_dir": str(output), "verification_images": images, "verify_manifest": args.verify_manifest,
+        "merge_policy": "merge", "reload_policy": "strict", "max_new_tokens": args.max_new_tokens,
+        "atol": args.tolerance, "rtol": args.tolerance,
+        "allowed_mask_disagreement": args.max_mask_disagreement,
+        "parameter_dtypes": sorted({str(parameter.dtype) for parameter in model.parameters()})})
+    print(f"Export diagnostics: {diagnostics}", flush=True)
     model = model.cuda().eval()
-    before = export_probe(model, args.verify_image, args.max_new_tokens)
+    before = [export_probe(model, image, args.max_new_tokens) for image in images]
     model.qwen = model.qwen.merge_and_unload(safe_merge=True)
-    merged = export_probe(model, args.verify_image, args.max_new_tokens)
-    merge_difference = compare_probes(before, merged, args.tolerance, args.max_mask_disagreement)
+    merged = [export_probe(model, image, args.max_new_tokens) for image in images]
+    merge_difference = compare_probe_sets(before, merged, images, args.tolerance, args.max_mask_disagreement,
+        stage="unmerged_vs_merged", policy="merge", diagnostics=diagnostics)
     model.save_pretrained(output)
-    del model, merged
+    del model
     gc.collect()
     torch.cuda.empty_cache()
     restored = QwenSAM.from_pretrained(output).cuda().eval()
-    after = export_probe(restored, args.verify_image, args.max_new_tokens)
-    reload_difference = compare_probes(before, after, args.tolerance, args.max_mask_disagreement)
+    after = [export_probe(restored, image, args.max_new_tokens) for image in images]
+    # Serialization has no new LoRA rounding: keep strict numerical gates here.
+    # End-to-end unmerged/reloaded checks use the task-level merge policy.
+    serialization_difference = compare_probe_sets(merged, after, images, args.tolerance, args.max_mask_disagreement,
+        stage="merged_vs_reloaded", policy="strict", diagnostics=diagnostics)
+    reload_difference = compare_probe_sets(before, after, images, args.tolerance, args.max_mask_disagreement,
+        stage="unmerged_vs_reloaded", policy="merge", diagnostics=diagnostics)
     write_json(output / "export_verification.json", {"passed": True, "source_tag": tag,
-        "source_run": str(run), "image": args.verify_image, "tolerance": args.tolerance,
+        "source_run": str(run), "verification_images": images, "tolerance": args.tolerance,
+        "merge_policy": "merge", "reload_policy": "strict",
         "allowed_mask_disagreement": args.max_mask_disagreement,
         "merge_comparison": merge_difference, "reload_comparison": reload_difference,
+        "serialization_comparison": serialization_difference, "diagnostics_dir": str(diagnostics),
         "source_qwen_revision": metadata["composite"]["source_qwen_revision"]})
     print(f"Verified self-contained export: {output}", flush=True)
 

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "image_dir": "/workspace/datasets/demo_dataset/reason_seg/ReasonSeg/val",
+  "images": [
+    "rs08006.jpg",
+    "rs08016.jpg",
+    "rs08051.jpg",
+    "rs08071.jpg",
+    "rs08299.jpg",
+    "rs08302.jpg",
+    "rs08306.jpg",
+    "rs08319.jpg"
+  ]
+}
