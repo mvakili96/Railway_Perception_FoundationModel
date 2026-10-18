@@ -69,8 +69,14 @@ def parse_args(argv=None):
     parser.add_argument("--wandb_project", default="qwen-rail")
     parser.add_argument("--wandb_mode", choices=("online", "offline", "disabled"), default="offline")
     parser.add_argument("--local_rank", "--local-rank", type=int, default=int(os.environ.get("LOCAL_RANK", 0)))
+    rate_help = {
+        "lr": "Learning rate for SAM, the segmentation bridge/head and SEG rows",
+        "lora_lr": "Learning rate for Qwen language LoRA only (separate from lr)",
+        "vision_lr": "Learning rate for trainable Qwen vision-encoder blocks",
+        "merger_lr": "Learning rate for the main and all DeepStack visual mergers (separate from vision_lr)",
+    }
     for name, default in asdict(TrainingPolicy()).items():
-        parser.add_argument("--" + name, type=type(default), default=default)
+        parser.add_argument("--" + name, type=type(default), default=default, help=rate_help.get(name))
     parser.add_argument("--min_pixels", type=int, default=16384)
     parser.add_argument("--max_pixels", type=int, default=1048576)
     parser.add_argument("--max_seq_length", type=int, default=4096)
@@ -243,9 +249,7 @@ def main(argv=None):
     if rank == 0:
         print(json.dumps([{k: v for k, v in group.items() if k != "parameter_names"} for group in manifest]), flush=True)
     config = deepspeed_config(args.batch_size, args.grad_accumulation_steps, world, policy,
-        args.epochs * args.steps_per_epoch, args.zero_offload_optimizer)
-    config["scheduler"]["params"]["warmup_min_lr"] = [0.0] * len(groups)
-    config["scheduler"]["params"]["warmup_max_lr"] = [group["lr"] for group in groups]
+        args.epochs * args.steps_per_epoch, args.zero_offload_optimizer, optimizer_groups=groups)
     engine, _, _, _ = deepspeed.initialize(model=model, model_parameters=groups, config=config)
     start_epoch = 0
     best_score, best_tag = -1.0, None
@@ -254,8 +258,9 @@ def main(argv=None):
         synchronized_call(lambda: check_resume_model_file(engine.module, run_dir, tag), device)
         loaded, client = engine.load_checkpoint(str(run_dir / "checkpoints"), tag=tag,
             load_module_strict=True, load_optimizer_states=True, load_lr_scheduler_states=True)
-        if not loaded or client.get("settings") != settings:
+        if not loaded:
             raise ValueError("Checkpoint restore failed or metadata differs.")
+        check_resume_settings({**read_metadata(run_dir), "settings": client.get("settings", {})}, settings)
         start_epoch = client["next_epoch"]
         best_score, best_tag = client.get("best_score", -1.0), client.get("best_tag")
         if engine.global_steps != start_epoch * args.steps_per_epoch:

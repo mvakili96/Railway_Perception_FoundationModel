@@ -1,6 +1,7 @@
 """Qwen-specific trainability, losses, device transfer and ZeRO configuration."""
 
 from dataclasses import asdict, dataclass
+import math
 import torch
 from torch.nn import functional as F
 
@@ -10,7 +11,9 @@ from model.segmentation_losses import dice_loss, sigmoid_ce_loss
 @dataclass(frozen=True)
 class TrainingPolicy:
     lr: float = 1e-4
+    lora_lr: float = 1e-4
     vision_lr: float = 1e-5
+    merger_lr: float = 1e-5
     vision_last_blocks: int = 8
     lora_r: int = 8
     lora_alpha: int = 16
@@ -23,8 +26,10 @@ class TrainingPolicy:
     boundary_bce_weight: float = 1.0
 
     def __post_init__(self):
-        if self.lr <= 0 or self.vision_lr <= 0 or self.lora_r <= 0 or self.lora_alpha <= 0:
-            raise ValueError("Learning rates and LoRA sizes must be positive.")
+        if any(not math.isfinite(rate) or rate <= 0 for rate in
+               (self.lr, self.lora_lr, self.vision_lr, self.merger_lr)) or \
+           self.lora_r <= 0 or self.lora_alpha <= 0:
+            raise ValueError("Learning rates must be finite and positive; LoRA sizes must be positive.")
         if self.vision_last_blocks < 0 or not 0 <= self.lora_dropout < 1:
             raise ValueError("Invalid vision/LoRA policy.")
         if min(self.ce_loss_weight, self.bce_loss_weight, self.dice_loss_weight,
@@ -32,8 +37,14 @@ class TrainingPolicy:
             raise ValueError("Loss weights and boundary width cannot be negative.")
 
 
-def configure_training(model, policy):
-    """Apply PEFT first, then restore the explicitly chosen non-LoRA parameters."""
+def configure_training(model, policy, *, legacy_vision_group=False):
+    """Apply PEFT and partition trainable parameters into disjoint LR groups.
+
+    Old runs retain their exact combined vision-group order for optimizer-state
+    restore/export. Fresh runs separate backbone blocks from all visual mergers.
+    """
+    if legacy_vision_group and policy.merger_lr != policy.vision_lr:
+        raise ValueError("Legacy vision groups cannot change merger LR; start a new run.")
     from peft import LoraConfig, get_peft_model
     if hasattr(model.qwen, "peft_config"):
         raise ValueError("Refusing to wrap Qwen in PEFT twice.")
@@ -60,9 +71,11 @@ def configure_training(model, policy):
     for module in (model.text_projection, model.rail_ego_side_head, model.seg_query_bridge):
         if module is not None:
             module.requires_grad_(True)
+    vision_groups = [("vision", policy.vision_lr)] if legacy_vision_group else [
+        ("vision_backbone", policy.vision_lr), ("vision_mergers", policy.merger_lr)]
     groups = {key: {"params": [], "names": [], "lr": lr, "group_name": key}
-              for key, lr in (("language_lora", policy.lr), ("vision", policy.vision_lr),
-                              ("bridge_and_seg", policy.lr), ("sam", policy.lr))}
+              for key, lr in [("language_lora", policy.lora_lr), *vision_groups,
+                              ("bridge_and_seg", policy.lr), ("sam", policy.lr)]}
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
             continue
@@ -71,7 +84,12 @@ def configure_training(model, policy):
                 raise ValueError("LoRA must not target Qwen vision modules.")
             key = "language_lora"
         elif name.startswith("qwen.") and ".visual." in name:
-            key = "vision"
+            if legacy_vision_group:
+                key = "vision"
+            elif ".visual.merger." in name or ".visual.deepstack_merger_list." in name:
+                key = "vision_mergers"
+            else:
+                key = "vision_backbone"
         elif name.startswith("sam."):
             key = "sam"
         elif name.startswith(("text_projection.", "rail_ego_side_head.", "seg_query_bridge.")) or name.endswith(".seg_row"):
@@ -81,7 +99,7 @@ def configure_training(model, policy):
         groups[key]["params"].append(parameter)
         groups[key]["names"].append(name)
     manifest = [{"name": key, "lr": value["lr"], "parameter_count": sum(p.numel() for p in value["params"]),
-                 "parameter_names": value["names"]} for key, value in groups.items()]
+                 "parameter_names": value["names"]} for key, value in groups.items() if value["params"]]
     optimizer_groups = [{key: value for key, value in group.items() if key != "names"}
                         for group in groups.values() if group["params"]]
     parameters = [p for group in optimizer_groups for p in group["params"]]
@@ -91,11 +109,15 @@ def configure_training(model, policy):
 
 
 def deepspeed_config(batch_size, accumulation, world_size, policy, total_steps,
-                     offload=False, warmup_steps=100):
+                     offload=False, warmup_steps=100, *, optimizer_groups=None):
     if min(batch_size, accumulation, world_size, total_steps) <= 0:
         raise ValueError("Batch sizes and schedule must be positive.")
-    # Explicit per-group warmup preserves the 10x vision LR separation.
-    rates = [policy.lr, policy.vision_lr, policy.lr, policy.lr]
+    # Match actual group order, including frozen-backbone and legacy-resume
+    # cases; never let the scheduler replace a merger LR with the backbone LR.
+    rates = [group["lr"] for group in optimizer_groups] if optimizer_groups is not None else [
+        policy.lora_lr, policy.vision_lr, policy.merger_lr, policy.lr, policy.lr]
+    if not rates:
+        raise ValueError("Optimizer must have at least one parameter group.")
     config = {"train_micro_batch_size_per_gpu": batch_size,
         "gradient_accumulation_steps": accumulation,
         "train_batch_size": batch_size * accumulation * world_size,
@@ -103,7 +125,7 @@ def deepspeed_config(batch_size, accumulation, world_size, policy, total_steps,
         "optimizer": {"type": "AdamW", "params": {"lr": policy.lr,
             "weight_decay": 0.0, "betas": [0.9, 0.95], "torch_adam": not offload}},
         "scheduler": {"type": "WarmupDecayLR", "params": {"total_num_steps": total_steps,
-            "warmup_min_lr": [0.0] * 4, "warmup_max_lr": rates,
+            "warmup_min_lr": [0.0] * len(rates), "warmup_max_lr": rates,
             "warmup_num_steps": max(2, min(warmup_steps, total_steps - 1)), "warmup_type": "linear"}},
         "zero_optimization": {"stage": 2, "contiguous_gradients": True, "overlap_comm": True,
             "reduce_scatter": True, "reduce_bucket_size": 200000, "allgather_bucket_size": 200000}}

@@ -50,9 +50,18 @@ def save_run_metadata(run_dir, model, policy, settings, parameter_manifest):
 def check_resume_settings(metadata, settings):
     # Epoch count is part of the LR schedule: extending it requires an explicit
     # new experiment, not silently resetting or changing the restored scheduler.
-    if metadata["settings"] != settings:
-        differing = [key for key in set(metadata["settings"]) | set(settings)
-                     if metadata["settings"].get(key) != settings.get(key)]
+    saved = dict(metadata["settings"])
+    if "merger_lr" not in metadata.get("policy", {}) and "merger_lr" not in saved and "merger_lr" in settings:
+        # Before split groups existed, every merger used the saved vision LR.
+        # Normalize only this newly exposed setting, without changing the run.
+        saved["merger_lr"] = saved.get("vision_lr", TrainingPolicy().vision_lr)
+    if "lora_lr" not in metadata.get("policy", {}) and "lora_lr" not in saved and "lora_lr" in settings:
+        # Earlier runs shared their main LR between language LoRA and SAM/bridge.
+        # Only allow the historical rate when resuming, not a new experiment.
+        saved["lora_lr"] = saved.get("lr", TrainingPolicy().lr)
+    if saved != settings:
+        differing = [key for key in set(saved) | set(settings)
+                     if saved.get(key) != settings.get(key)]
         raise ValueError("Resume configuration differs: " + ", ".join(sorted(differing)))
 
 
@@ -80,7 +89,13 @@ def reconstruct_training_model(run_dir, dtype=torch.bfloat16):
     from transformers import GenerationConfig
     model.native_qwen.generation_config = GenerationConfig.from_pretrained(
         run_dir / "native_config", local_files_only=True)
-    groups, manifest = configure_training(model, TrainingPolicy(**metadata["policy"]))
+    policy_settings = dict(metadata["policy"])
+    policy_settings.setdefault("lora_lr", policy_settings["lr"])
+    legacy_vision_group = "merger_lr" not in policy_settings
+    if legacy_vision_group:
+        policy_settings["merger_lr"] = policy_settings["vision_lr"]
+    groups, manifest = configure_training(model, TrainingPolicy(**policy_settings),
+                                         legacy_vision_group=legacy_vision_group)
     saved_manifest = json.loads((run_dir / "parameter_groups.json").read_text())
     if saved_manifest != manifest:
         raise ValueError("Reconstructed trainability differs from saved checkpoint.")

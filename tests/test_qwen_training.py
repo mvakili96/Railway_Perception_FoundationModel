@@ -46,8 +46,8 @@ class QwenTrainingTest(unittest.TestCase):
         model = self.fixture.model()
         groups, manifest = configure_training(model, TrainingPolicy(vision_last_blocks=2))
         self.assertEqual([g["group_name"] for g in groups],
-                         ["language_lora", "vision", "bridge_and_seg", "sam"])
-        self.assertEqual([g["lr"] for g in groups], [1e-4, 1e-5, 1e-4, 1e-4])
+                         ["language_lora", "vision_backbone", "vision_mergers", "bridge_and_seg", "sam"])
+        self.assertEqual([g["lr"] for g in groups], [1e-4, 1e-5, 1e-5, 1e-4, 1e-4])
         names = [n for group in manifest for n in group["parameter_names"]]
         self.assertEqual(len(names), len(set(names)))
         self.assertTrue(any(n.endswith("embed_tokens.seg_row") for n in names))
@@ -223,7 +223,7 @@ class QwenTrainingTest(unittest.TestCase):
         config = deepspeed_config(1, 2, 8, TrainingPolicy(), 1000)
         self.assertEqual(config["zero_optimization"]["stage"], 2)
         self.assertNotIn("offload_optimizer", config["zero_optimization"])
-        self.assertEqual(config["scheduler"]["params"]["warmup_max_lr"], [1e-4, 1e-5, 1e-4, 1e-4])
+        self.assertEqual(config["scheduler"]["params"]["warmup_max_lr"], [1e-4, 1e-5, 1e-5, 1e-4, 1e-4])
         self.assertIn("offload_optimizer", deepspeed_config(1, 2, 8, TrainingPolicy(), 1000, True)["zero_optimization"])
         check_resume_settings({"settings": {"epochs": 20}}, {"epochs": 20})
         with self.assertRaisesRegex(ValueError, "epochs"):

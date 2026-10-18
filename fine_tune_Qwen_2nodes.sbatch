@@ -15,7 +15,7 @@
 
 set -euo pipefail
 export QWEN_IMG="${QWEN_IMG:-/scratch/mohammadjavad/Qwen3VL-v1.sif}"
-export QWEN_CODE="${QWEN_CODE:-/scratch/mohammadjavad/LISA_codebase}"
+export QWEN_CODE="${QWEN_CODE:-/scratch/mohammadjavad/QWEN-LISA_Codebase}"
 export QWEN_DATA="${QWEN_DATA:-/scratch/mohammadjavad/GSVA}"
 export QWEN_CHECKPOINTS="${QWEN_CHECKPOINTS:-/scratch/mohammadjavad/LISA}"
 export QWEN_MODEL="${QWEN_MODEL:-$QWEN_CHECKPOINTS/Qwen3-VL-8B-Instruct}"
@@ -40,9 +40,14 @@ else
     "--sam_init_source=$QWEN_SAM_INIT_SOURCE" "--sam_init_path=$QWEN_SAM_INIT_PATH")
 fi
 run_dir="${QWEN_RUN_DIR:-/workspace/home/runs/qwen_${SLURM_JOB_ID}}"
+# Lower only language LoRA to 3e-5; keep SAM/bridge at 1e-4 and vision/mergers at 1e-5.
 srun --label --kill-on-bad-exit=1 bash "$QWEN_CODE/qwen_hpc_run.sh" train_qwen_sam.py \
   "--run_dir=$run_dir" --dataset_dir=/workspace/datasets/demo_dataset \
   --batch_size=1 --grad_accumulation_steps=2 --epochs=20 --steps_per_epoch=50 \
+  --lr=0.0001 \
+  --lora_lr=0.00003 \
+  --vision_lr=0.00001 \
+  --merger_lr=0.00001 \
   --seg_prompt_bridge_type=single --use_wandb --wandb_mode=offline --keep_last_checkpoints=2 \
   --epoch_switch_validation_json=/workspace/datasets/demo_dataset/reason_seg/ReasonSeg/explanatory/rail_switch_validation.json \
   "${initialization[@]}" "$@"
