@@ -43,7 +43,10 @@ for argument in "$@"; do
     --verify_image|--verify_image=*|--verify_manifest|--verify_manifest=*) verification_args=(); break ;;
   esac
 done
+# Temporarily skip only the synthetic [SEG]. probe. Remove --skip_teacher_probe
+# below to re-enable it; normal generation and save/reload verification stay active.
 srun --kill-on-bad-exit=1 bash "$QWEN_CODE/qwen_hpc_run.sh" merge_qwen_sam.py \
   "--run_dir=$QWEN_RUN_DIR" "--output_dir=$QWEN_EXPORT_DIR" \
+  --skip_teacher_probe \
   ${verification_args[@]+"${verification_args[@]}"} "--max_new_tokens=$QWEN_MAX_NEW_TOKENS" \
   ${checkpoint_args[@]+"${checkpoint_args[@]}"} "$@"

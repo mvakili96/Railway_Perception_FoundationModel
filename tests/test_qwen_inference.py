@@ -28,6 +28,7 @@ class QwenInferenceLauncherTest(unittest.TestCase):
         self.assertIn("--run_dir=/workspace/home/runs/qwen_159894", merge)
         self.assertIn("--output_dir=/workspace/home/exports/qwen_159894", merge)
         self.assertIn("--max_new_tokens=512", merge)
+        self.assertIn("--skip_teacher_probe", merge)
         self.assertIn("--verify_manifest=/workspace/home/configs/qwen_export_validation.json", merge)
         self.assertFalse(any(arg.startswith("--tag") for arg in merge))
         self.assertIn("--model_path=/workspace/home/exports/qwen_159894", demo)

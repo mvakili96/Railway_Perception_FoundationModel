@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ML_ERROR = None
@@ -29,6 +29,81 @@ class QwenExportDiagnosticsTest(unittest.TestCase):
     def compare(self, reference, candidate, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()):
             return export.compare_probes(reference, candidate, 0.03, **kwargs)
+
+    def generation_only_probe(self):
+        return {key: value for key, value in self.probe().items() if key in ("answers", "generated_masks")}
+
+    def test_skip_flag_avoids_teacher_forward_and_default_still_runs_it(self):
+        for skip in (False, True):
+            with self.subTest(skip=skip):
+                model = MagicMock()
+                model.parameters.side_effect = lambda: iter([torch.ones(1)])
+                model.generate_masks.return_value = {"answers": ["[SEG]."], "pred_masks": [torch.ones(1, 2, 2)]}
+                model.return_value = {"pred_masks": [torch.ones(1, 2, 2)], "logits": torch.zeros(1, 3, 4)}
+                samples = []
+                def collate(items):
+                    samples.extend(items)
+                    return {}
+                with patch.object(export, "inference_sample", side_effect=lambda *args:
+                                  SimpleNamespace(original_size=(2, 2), inference=True)) as sample_factory, \
+                     patch.object(export, "QwenSegCollator", return_value=collate), \
+                     patch.object(export, "move_batch", side_effect=lambda batch, device, dtype: batch):
+                    options = {"skip_teacher_probe": True} if skip else {}
+                    result = export.export_probe(model, "/image.jpg", 256, **options)
+                model.generate_masks.assert_called_once_with({}, max_new_tokens=256, do_sample=False)
+                self.assertEqual(model.call_count, 0 if skip else 1)
+                self.assertEqual(sample_factory.call_count, 1 if skip else 2)
+                self.assertEqual(len(samples), 1 if skip else 2)
+                self.assertEqual(result["answers"], ["[SEG]."])
+                self.assertEqual("teacher_masks" in result, not skip)
+                self.assertEqual("logits" in result, not skip)
+                if not skip:
+                    self.assertFalse(samples[-1].inference)
+                    self.assertEqual(samples[-1].answers, ["[SEG]."])
+                    self.assertEqual(result["logits"].shape, (1, 2, 4))
+
+    def test_generation_only_comparisons_record_skipped_teacher_checks(self):
+        for policy in ("merge", "strict"):
+            with self.subTest(policy=policy):
+                report = self.compare(self.generation_only_probe(), self.generation_only_probe(),
+                                      policy=policy, skip_teacher_probe=True)
+                self.assertTrue(report["passed"])
+                self.assertTrue(report["teacher_probe_skipped"])
+                self.assertEqual([entry["name"] for entry in report["tensors"]], ["generated_masks[0]"])
+                self.assertEqual(report["tensors"][0]["raw_logit_gate_applied"], policy == "strict")
+
+    def test_teacher_data_cannot_disappear_without_explicit_skip(self):
+        with self.assertRaisesRegex(export.ProbeComparisonError, "Missing required") as raised:
+            self.compare(self.generation_only_probe(), self.generation_only_probe(), policy="merge")
+        self.assertFalse(raised.exception.report["teacher_probe_skipped"])
+        self.assertEqual(len(raised.exception.report["failures"]), 2)
+
+    def test_skip_keeps_generated_answer_and_mask_safety_gates(self):
+        for change in ("answer", "mask", "nonfinite", "dtype", "shape", "missing_seg", "multiple_seg"):
+            before, after = self.generation_only_probe(), self.generation_only_probe()
+            if change == "answer":
+                after["answers"] = ["A different answer."]
+            elif change == "mask":
+                after["generated_masks"][0][0, 0, 0] = -1
+            elif change == "nonfinite":
+                after["generated_masks"][0][0, 0, 0] = float("nan")
+            elif change == "dtype":
+                after["generated_masks"][0] = after["generated_masks"][0].bfloat16()
+            elif change == "shape":
+                after["generated_masks"] = [torch.ones(1, 2, 3)]
+            elif change == "missing_seg":
+                before["generated_masks"] = after["generated_masks"] = [torch.empty(0, 2, 2)]
+            else:
+                before["generated_masks"] = after["generated_masks"] = [torch.ones(2, 2, 2)]
+            with self.subTest(change=change), self.assertRaises(export.ProbeComparisonError):
+                self.compare(before, after, policy="merge", skip_teacher_probe=True)
+
+    def test_skip_keeps_strict_reload_gate_on_generated_mask_logits(self):
+        before, after = self.generation_only_probe(), self.generation_only_probe()
+        after["generated_masks"][0] += 0.25
+        self.assertTrue(self.compare(before, after, policy="merge", skip_teacher_probe=True)["passed"])
+        with self.assertRaisesRegex(export.ProbeComparisonError, "raw-logit"):
+            self.compare(before, after, policy="strict", skip_teacher_probe=True)
 
     def test_raw_logit_failure_still_reports_identical_binary_masks_and_all_tensors(self):
         before = self.probe()
@@ -162,6 +237,7 @@ class QwenExportDiagnosticsTest(unittest.TestCase):
                              "--verify_image", str(image)])
             verification = json.loads((root / "out" / "export_verification.json").read_text())
             self.assertTrue(verification["passed"])
+            self.assertFalse(verification["teacher_probe_skipped"])
             for field, stage in (("merge_comparison", "unmerged_vs_merged"),
                                  ("serialization_comparison", "merged_vs_reloaded"),
                                  ("reload_comparison", "unmerged_vs_reloaded")):
@@ -302,12 +378,68 @@ class QwenExportDiagnosticsTest(unittest.TestCase):
                              "--verify_manifest", str(manifest)])
             ordered = [str(image.resolve()) for image in images]
             self.assertEqual([call.args[1] for call in probe.call_args_list], ordered * 3)
+            self.assertTrue(all(call.kwargs == {"skip_teacher_probe": False} for call in probe.call_args_list))
             verification = json.loads((root / "out" / "export_verification.json").read_text())
             self.assertEqual(verification["verification_images"], ordered)
             for field in ("merge_comparison", "serialization_comparison", "reload_comparison"):
                 self.assertEqual(verification[field]["sample_count"], 2)
                 self.assertEqual(verification[field]["passed_sample_count"], 2)
                 self.assertEqual([report["image"] for report in verification[field]["results"]], ordered)
+
+    def test_skip_pipeline_preserves_generation_and_reload_verification(self):
+        for failure in (None, "merge_answer", "merge_mask", "reload_mask_logits"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                images = [root / "a.jpg", root / "b.jpg"]
+                for image in images:
+                    image.write_bytes(b"existence-only mocked probe")
+                manifest = root / "manifest.json"
+                manifest.write_text(json.dumps({"schema_version": 1, "image_dir": ".",
+                                                "images": [image.name for image in images]}))
+                probes = [self.generation_only_probe() for _ in range(6)]
+                if failure == "merge_answer":
+                    probes[2]["answers"] = ["Changed answer."]
+                elif failure == "merge_mask":
+                    probes[2]["generated_masks"][0][0, 0, 0] = -1
+                elif failure == "reload_mask_logits":
+                    probes[4]["generated_masks"][0] += 0.25
+                model = SimpleNamespace()
+                model.cuda = lambda: model
+                model.eval = lambda: model
+                model.parameters = lambda: iter([torch.ones(1, dtype=torch.bfloat16)])
+                model.qwen = SimpleNamespace(merge_and_unload=lambda **kwargs: object())
+                model.save_pretrained = lambda path: path.mkdir()
+                metadata = {"composite": {"source_qwen_revision": "a" * 40}}
+                with patch.object(export, "restore_for_export", return_value=(model, metadata, "epoch_020")), \
+                     patch.object(export, "export_probe", side_effect=probes) as probe, \
+                     patch.object(export.QwenSAM, "from_pretrained", return_value=model), \
+                     patch.object(export.torch.cuda, "empty_cache"), contextlib.redirect_stdout(io.StringIO()):
+                    arguments = ["--run_dir", str(root / "run"), "--output_dir", str(root / "out"),
+                                 "--verify_manifest", str(manifest), "--skip_teacher_probe"]
+                    if failure is None:
+                        export.main(arguments)
+                    else:
+                        with self.assertRaises(export.ProbeComparisonError):
+                            export.main(arguments)
+                self.assertTrue(all(call.kwargs == {"skip_teacher_probe": True} for call in probe.call_args_list))
+                self.assertEqual(probe.call_count, 4 if failure in ("merge_answer", "merge_mask") else 6)
+                attempt_path, = (root / "run" / "export_diagnostics").glob("*/attempt.json")
+                self.assertTrue(json.loads(attempt_path.read_text())["teacher_probe_skipped"])
+                marker = root / "out" / "export_verification.json"
+                self.assertEqual(marker.exists(), failure is None)
+                if failure in ("merge_answer", "merge_mask"):
+                    self.assertFalse((root / "out").exists())
+                if failure is None:
+                    report = json.loads(marker.read_text())
+                    self.assertTrue(report["teacher_probe_skipped"])
+                    ordered = [str(image.resolve()) for image in images]
+                    self.assertEqual([call.args[1] for call in probe.call_args_list], ordered * 3)
+                    for field in ("merge_comparison", "serialization_comparison", "reload_comparison"):
+                        self.assertTrue(report[field]["teacher_probe_skipped"])
+                        self.assertTrue(report[field]["passed"])
+                        for sample in report[field]["results"]:
+                            self.assertTrue(sample["teacher_probe_skipped"])
+                            self.assertEqual([entry["name"] for entry in sample["tensors"]], ["generated_masks[0]"])
 
 
 if __name__ == "__main__":

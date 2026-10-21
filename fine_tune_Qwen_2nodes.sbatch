@@ -41,6 +41,8 @@ else
 fi
 run_dir="${QWEN_RUN_DIR:-/workspace/home/runs/qwen_${SLURM_JOB_ID}}"
 # Lower only language LoRA to 3e-5; keep SAM/bridge at 1e-4 and vision/mergers at 1e-5.
+# Best-checkpoint choices: val/giou (default), val/ciou, or val/switch_subset/joint_accuracy.
+# Epochs are still saved normally; retention protects the best under this criterion.
 srun --label --kill-on-bad-exit=1 bash "$QWEN_CODE/qwen_hpc_run.sh" train_qwen_sam.py \
   "--run_dir=$run_dir" --dataset_dir=/workspace/datasets/demo_dataset \
   --batch_size=1 --grad_accumulation_steps=2 --epochs=20 --steps_per_epoch=50 \
@@ -49,5 +51,6 @@ srun --label --kill-on-bad-exit=1 bash "$QWEN_CODE/qwen_hpc_run.sh" train_qwen_s
   --vision_lr=0.00001 \
   --merger_lr=0.00001 \
   --seg_prompt_bridge_type=single --use_wandb --wandb_mode=offline --keep_last_checkpoints=2 \
+  --best_checkpoint_metric=val/giou \
   --epoch_switch_validation_json=/workspace/datasets/demo_dataset/reason_seg/ReasonSeg/explanatory/rail_switch_validation.json \
   "${initialization[@]}" "$@"

@@ -18,6 +18,8 @@ from model.qwen_sam_config import QwenSAMConfig
 from utils.dataset import HybridDataset, ValDataset
 from utils.qwen_checkpoint import (check_resume_settings, read_metadata, reconstruct_training_model,
     resolve_checkpoint_tag, save_run_metadata, write_json, check_resume_model_file, prune_completed_checkpoints)
+from utils.qwen_checkpoint_selection import (BEST_CHECKPOINT_METRICS, DEFAULT_BEST_CHECKPOINT_METRIC,
+    best_checkpoint_record, restore_best_checkpoint, select_best_checkpoint)
 from utils.qwen_evaluation import foreground_iou, inference_sample
 from utils.qwen_processing import QwenProcessingConfig, QwenSegCollator
 from utils.qwen_training import TrainingPolicy, compute_losses, configure_training, deepspeed_config, move_batch
@@ -62,6 +64,9 @@ def parse_args(argv=None):
     parser.add_argument("--stop_after_epochs", type=int, help="Short gate; retain the full saved LR schedule")
     parser.add_argument("--keep_last_checkpoints", type=int, default=0,
                         help="Opt-in retention; 0 keeps all, positive keeps last N plus best validation epoch")
+    parser.add_argument("--best_checkpoint_metric", choices=BEST_CHECKPOINT_METRICS,
+                        default=DEFAULT_BEST_CHECKPOINT_METRIC,
+                        help="Validation metric to maximize for best-checkpoint retention; ties keep the earlier epoch")
     parser.add_argument("--learning_gate", action="store_true", help="Inspect full gradients and group updates on first update")
     parser.add_argument("--distributed_gate", action="store_true",
                         help="Short diagnostic only: rotate real semantic, rail-mask and rail-text samples across ranks")
@@ -87,6 +92,9 @@ def parse_args(argv=None):
         parser.error("stop_after_epochs must be positive.")
     if args.keep_last_checkpoints < 0:
         parser.error("keep_last_checkpoints cannot be negative.")
+    if args.best_checkpoint_metric == "val/switch_subset/joint_accuracy" and \
+       (args.no_eval or not args.epoch_switch_validation):
+        parser.error("Joint-accuracy checkpoint selection requires evaluation and epoch_switch_validation.")
     if args.distributed_gate and (args.batch_size != 1 or args.steps_per_epoch > 5 or not args.stop_after_epochs):
         parser.error("distributed_gate requires batch_size=1, steps_per_epoch<=5 and stop_after_epochs.")
     if args.resume and (args.sam_init_path or args.sam_init_source or args.model_dir):
@@ -248,6 +256,7 @@ def main(argv=None):
                           if rank == 0 else None, device)
     if rank == 0:
         print(json.dumps([{k: v for k, v in group.items() if k != "parameter_names"} for group in manifest]), flush=True)
+        print(f"Best-checkpoint metric: {args.best_checkpoint_metric} (maximize; ties keep the earlier epoch)", flush=True)
     config = deepspeed_config(args.batch_size, args.grad_accumulation_steps, world, policy,
         args.epochs * args.steps_per_epoch, args.zero_offload_optimizer, optimizer_groups=groups)
     engine, _, _, _ = deepspeed.initialize(model=model, model_parameters=groups, config=config)
@@ -262,7 +271,7 @@ def main(argv=None):
             raise ValueError("Checkpoint restore failed or metadata differs.")
         check_resume_settings({**read_metadata(run_dir), "settings": client.get("settings", {})}, settings)
         start_epoch = client["next_epoch"]
-        best_score, best_tag = client.get("best_score", -1.0), client.get("best_tag")
+        best_score, best_tag = restore_best_checkpoint(client, args.best_checkpoint_metric)
         if engine.global_steps != start_epoch * args.steps_per_epoch:
             raise ValueError("Checkpoint is not a completed optimizer/epoch boundary.")
         engine.module.validate_auxiliary_parameters()
@@ -379,21 +388,23 @@ def main(argv=None):
             if wandb_run:
                 wandb_run.log({"epoch": epoch, **metrics}, step=engine.global_steps)
         tag = f"epoch_{epoch + 1:03d}"
-        if metrics.get("val/giou", -1) > best_score:
-            best_score, best_tag = metrics["val/giou"], tag
+        best_score, best_tag = select_best_checkpoint(metrics, args.best_checkpoint_metric,
+            best_score, best_tag, tag, allow_missing=args.no_eval)
         # Every rank participates. Frozen native weights are retained for a
         # standalone restore/export, not omitted to reduce checkpoint size.
         torch.cuda.synchronize(device)
         torch.cuda.empty_cache()
         saved = engine.save_checkpoint(str(run_dir / "checkpoints"), tag=tag,
             client_state={"next_epoch": epoch + 1, "settings": settings,
-                          "best_score": best_score, "best_tag": best_tag}, exclude_frozen_parameters=False)
+                          "best_score": best_score, "best_tag": best_tag,
+                          "best_checkpoint_metric": args.best_checkpoint_metric}, exclude_frozen_parameters=False)
         if not saved:
             raise RuntimeError("DeepSpeed checkpoint save failed.")
         dist.barrier()
         def finish_checkpoint():
             if rank == 0:
-                write_json(run_dir / "best_checkpoint.json", {"tag": best_tag, "giou": best_score})
+                write_json(run_dir / "best_checkpoint.json",
+                           best_checkpoint_record(args.best_checkpoint_metric, best_score, best_tag))
                 removed = prune_completed_checkpoints(run_dir, args.keep_last_checkpoints,
                                                        [best_tag] if best_tag else [])
                 if removed:

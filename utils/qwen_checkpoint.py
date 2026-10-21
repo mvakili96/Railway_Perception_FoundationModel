@@ -13,6 +13,7 @@ from model.qwen_sam_config import QwenSAMConfig
 from model.segment_anything import build_sam_vit_h
 from utils.qwen_processing import QwenProcessingConfig
 from utils.qwen_training import TrainingPolicy, configure_training
+from utils.qwen_checkpoint_selection import DEFAULT_BEST_CHECKPOINT_METRIC
 
 
 METADATA_NAME = "training_config.json"
@@ -59,6 +60,9 @@ def check_resume_settings(metadata, settings):
         # Earlier runs shared their main LR between language LoRA and SAM/bridge.
         # Only allow the historical rate when resuming, not a new experiment.
         saved["lora_lr"] = saved.get("lr", TrainingPolicy().lr)
+    if "best_checkpoint_metric" not in saved and "best_checkpoint_metric" in settings:
+        # Runs created before this option always tracked the best validation GIoU.
+        saved["best_checkpoint_metric"] = DEFAULT_BEST_CHECKPOINT_METRIC
     if saved != settings:
         differing = [key for key in set(saved) | set(settings)
                      if saved.get(key) != settings.get(key)]
